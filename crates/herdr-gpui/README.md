@@ -1970,9 +1970,9 @@ unchanged so agents can read the shared clipboard themselves.
 
 On Windows, Ctrl-V is the app's paste while the clipboard holds text, and that
 keystroke is not sent to the pane. When the clipboard holds no text, Ctrl-V
-behaves as described above: on an SSH endpoint a clipboard image goes through
-the image bridge, and otherwise Ctrl-V is sent to the terminal. Windows has no
-clipboard image paste of its own.
+behaves as described above: on an SSH or WSL endpoint a clipboard image goes
+through the image bridge, and on a local endpoint Ctrl-V is sent to the
+terminal.
 
 The daemon writes a temporary file and pastes its path into the
 target terminal. OpenCode or another agent can recognize that path as an image;
