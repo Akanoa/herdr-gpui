@@ -3,6 +3,9 @@ use super::*;
 mod fallback_paste;
 mod reservations;
 mod uploads;
+// A Windows worker has no wake to wait on: it still polls every 10 ms.
+#[cfg(unix)]
+mod wakes;
 
 fn reserve(client: &Client) -> ClipboardImageUpload {
     client

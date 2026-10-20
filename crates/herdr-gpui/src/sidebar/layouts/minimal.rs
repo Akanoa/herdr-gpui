@@ -40,8 +40,7 @@ fn shell(
         .flex()
         .items_center()
         .cursor_pointer()
-        .map(|row| cx.mark.apply(row, key, &look))
-        .map(|row| look.mark(row, key, state, cx.theme))
+        .map(|row| look.mark(row, key, (state, cx.mark), cx.theme))
         .child(
             line.into_div()
                 .when(lines.is_some(), |line| line.items_start()),
@@ -176,15 +175,30 @@ impl RowLayout for Minimal {
                 parts::status(agent.status, false, cx),
             )
             .fixed(icon, parts::icon(agent.icon.path(), icon, color))
-            .fill(name(&agent.key, kind, state, false, theme), agent.name)
-            .when_some(agent.status_text.as_deref(), |line, text| {
+            .lead(
+                name(&agent.key, kind, state, false, theme),
+                agent.name,
+                parts::glyph_at(font, font.size),
+                0.4,
+            )
+            .when_some(agent.pane, |line, pane| {
                 line.label(
+                    div()
+                        .debug_selector(|| format!("pane-{}", agent.key))
+                        .text_color(rgb(theme.muted)),
+                    pane,
+                    parts::glyph_at(font, font.size),
+                    0.5,
+                )
+            })
+            .when_some(agent.status_text.as_deref(), |line, text| {
+                line.keep(
                     div()
                         .debug_selector(|| format!("status-{}", agent.key))
                         .text_color(rgb(cx.indicators.color(agent.status))),
                     text,
                     parts::glyph_at(font, font.size),
-                    0.5,
+                    0.3,
                 )
             });
         shell(&agent.key, state, 0., (line, None), cx)

@@ -68,6 +68,11 @@ mod tab_strip;
 #[cfg(any(target_os = "macos", windows))]
 mod tab_steps;
 
+/// Move Tab Left and Right move a page among the pages. Needs a build that
+/// shows pages: elsewhere a new tab opens nothing.
+#[cfg(any(target_os = "macos", windows))]
+mod tab_moves;
+
 /// The VS Code tab's server checks. No native page is created, so this
 /// runs on every platform, except the checks only builds that show pages
 /// make.
@@ -103,6 +108,11 @@ mod overlays;
 
 /// What closing a workspace does to its browser tabs.
 mod workspace_close;
+
+/// The font size keys zoom a browser tab's page. Only builds that show
+/// pages open a browser tab.
+#[cfg(any(target_os = "macos", windows))]
+mod zoom;
 
 /// Terminal padding beside a page; only builds that show pages open one.
 #[cfg(any(target_os = "macos", windows))]

@@ -9,6 +9,7 @@ fn pasted_profile() -> Profile {
         avatar_updates: None,
         source: Default::default(),
         organizations: Some(vec!["emu-org".into()]),
+        access: Default::default(),
     }
 }
 
@@ -130,6 +131,7 @@ fn a_check_that_cannot_list_organizations_keeps_those_listed_before() {
     auth.profile = Some(pasted_profile());
     let unlisted = || Profile {
         organizations: None,
+        access: Default::default(),
         ..pasted_profile()
     };
     auth.complete_profile_fixture(Ok(Some(unlisted())));
@@ -141,6 +143,7 @@ fn a_check_that_cannot_list_organizations_keeps_those_listed_before() {
     // A listing that succeeded replaces them, even when it is empty.
     auth.complete_profile_fixture(Ok(Some(Profile {
         organizations: Some(Vec::new()),
+        access: Default::default(),
         ..pasted_profile()
     })));
     auth.poll_with_store(|_| panic!("no storage"));

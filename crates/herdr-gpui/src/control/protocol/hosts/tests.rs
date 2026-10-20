@@ -2,6 +2,8 @@
 use super::*;
 use crate::control::protocol::{Call, Caller, MAX_WAIT_SECONDS, Request, Response};
 
+mod security;
+
 #[test]
 fn host_requests_have_a_stable_wire_form() {
     let request = Request::Host(Call {
@@ -27,6 +29,7 @@ fn host_requests_have_a_stable_wire_form() {
         HostOp::OpenPort { port: 8080 },
         HostOp::Usage,
         HostOp::System,
+        HostOp::Security,
         HostOp::Cloud,
         HostOp::CloudSetup { id: "w1".into() },
     ] {

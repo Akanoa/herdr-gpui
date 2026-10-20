@@ -8,6 +8,7 @@ pub(super) enum Section {
     #[default]
     Theme,
     Sidebar,
+    Indicators,
     Fonts,
     StatusBar,
     Tabs,
@@ -55,6 +56,7 @@ impl Section {
         Self::General,
         Self::Theme,
         Self::Sidebar,
+        Self::Indicators,
         Self::Fonts,
         Self::StatusBar,
         Self::Tabs,
@@ -71,6 +73,7 @@ impl Section {
         match self {
             Self::Theme => "Theme",
             Self::Sidebar => "Sidebar",
+            Self::Indicators => "Indicators",
             Self::Fonts => "Fonts",
             Self::StatusBar => "Status bar",
             Self::General => "General",
@@ -89,6 +92,10 @@ impl Section {
         match self {
             Self::Theme => Some("Hover a theme to try it in the app; click to keep it."),
             Self::Sidebar => Some("Changes apply to every open window immediately."),
+            Self::Indicators => Some(
+                "How agent status shows in the sidebar, tabs and the collapsed rail. \
+                 Working always moves; reduced motion holds it still.",
+            ),
             Self::Fonts => Some("Each face can have its own family and size."),
             Self::StatusBar => Some("Which items the bottom bar shows, and how compactly."),
             Self::Code => Some(
@@ -112,7 +119,9 @@ impl Section {
     pub(super) fn group(self) -> Option<Group> {
         match self {
             Self::General => None,
-            Self::Theme | Self::Sidebar | Self::Fonts | Self::StatusBar => Some(Group::Appearance),
+            Self::Theme | Self::Sidebar | Self::Indicators | Self::Fonts | Self::StatusBar => {
+                Some(Group::Appearance)
+            }
             Self::Tabs | Self::Code | Self::Notifications => Some(Group::Behaviour),
             Self::Integrations | Self::Plugins => Some(Group::Connect),
             #[cfg(feature = "cloud")]
@@ -125,6 +134,7 @@ impl Section {
         match self {
             Self::Theme => "icons/theme.svg",
             Self::Sidebar => "icons/panel-left.svg",
+            Self::Indicators => "icons/pulse.svg",
             Self::Fonts => "icons/pencil.svg",
             Self::StatusBar => "icons/status-bar.svg",
             Self::General => "icons/settings.svg",

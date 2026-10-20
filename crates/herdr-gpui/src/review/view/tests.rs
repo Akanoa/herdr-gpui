@@ -138,7 +138,7 @@ fn notes_on_lines_reach_the_agent_that_made_the_changes(cx: &mut gpui::TestAppCo
         assert_eq!(view.deliveries.len(), 1);
         assert!(view.menu.page.is_none());
         let notes = &view.reviews.values().next().unwrap().notes;
-        assert!(notes.len() == 2 && notes.iter().all(|note| note.sent));
+        assert!(notes.len() == 2 && notes.iter().all(|note| note.sent.is_some()));
     });
     cx.update(|_, cx| view.update(cx, |view, cx| view.poll_deliveries(cx)));
     assert_eq!(view.read_with(cx, |view, _| view.deliveries.len()), 1);
@@ -248,4 +248,5 @@ mod search;
 mod selection;
 mod split_resize;
 mod tab;
+mod withdraw;
 mod wrap;

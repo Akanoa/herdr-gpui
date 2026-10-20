@@ -45,15 +45,15 @@ impl SettingsWindow {
             .child(ui::section(theme, "Files", None))
             .child(self.file_row(
                 "config-local",
-                "GUI overrides",
-                ui::Source::Local,
+                "Herdr UI settings",
+                ui::Source::HerdrUi,
                 self.controls.local_path.clone(),
                 self.controls.local_file.clone(),
             ))
             .child(self.gate_shared(self.file_row(
                 "config-shared",
                 "Herdr configuration",
-                ui::Source::Shared,
+                ui::Source::Herdr,
                 shared_path.as_ref().map_or_else(
                     || "Unavailable".to_owned(),
                     |path| path.display().to_string(),

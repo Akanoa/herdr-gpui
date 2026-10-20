@@ -9,6 +9,7 @@ fn cli_profile(repo_scope: bool) -> Profile {
         avatar_updates: None,
         source: Source::GitHubCli { repo_scope },
         organizations: None,
+        access: Default::default(),
     }
 }
 

@@ -438,9 +438,15 @@ impl HerdrWindow {
         )?)
     }
 
-    /// Whether a script, of a worktree or a new cloud device, is starting.
-    /// The connection keeps one script reply slot, so one starts at a time.
+    /// Whether a script, of a worktree or a new cloud device, or a closed
+    /// agent's tab is starting. The connection keeps one script reply slot,
+    /// so one starts at a time.
     pub(crate) fn script_slot_busy(&self) -> bool {
+        self.overview_reopening() || self.script_job_busy()
+    }
+
+    /// Whether a worktree or cloud device script holds the script slot.
+    pub(crate) fn script_job_busy(&self) -> bool {
         #[cfg(feature = "cloud")]
         if self.cloud_setup.is_some() {
             return true;

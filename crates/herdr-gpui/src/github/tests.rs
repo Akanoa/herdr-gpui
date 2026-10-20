@@ -26,6 +26,7 @@ mod additional;
 mod aliases;
 mod device_auth;
 mod github_cli;
+mod installation;
 mod limits;
 mod rejection;
 mod responses;

@@ -1,7 +1,7 @@
 # Native Client API
 
 Local, SSH, and WSL client for Herdr's stable generation 1 endpoint. Local
-connections work on Unix and on Windows; SSH endpoints are Unix-only, and WSL
+connections and SSH endpoints work on Unix and on Windows, and WSL
 distributions are Windows-only. This crate
 does not link Herdr, GPUI, ratatui, crossterm, Tokio, or a PTY implementation.
 The workspace centralizes the pinned GPUI dependency (`gpui-pre` 0.3.6) for the GUI member.
@@ -61,8 +61,7 @@ spawning. The client never removes session directories itself. It validates
 names, bounds local stopping to 20 seconds and deletion to 15 seconds (45 seconds
 for the complete SSH operation), discards remote diagnostics, and kills/reaps
 only its CLI or SSH child on failure. A
-timeout is an uncertain result: refresh rather than replay. SSH functions are
-unavailable on Windows. Creating a session is the connection/startup layer's
+timeout is an uncertain result: refresh rather than replay. Creating a session is the connection/startup layer's
 responsibility, not an interactive `session attach` command.
 
 `ClientHandle` is cloneable. Its exact methods are:
@@ -145,9 +144,9 @@ These calls (`transport/overlapped.rs`) are the stream's only `unsafe`, because
 `interprocess` and the standard library block in `WriteFile` and the asynchronous
 wrappers need a runtime or a completion-port reactor. The crate also exports
 `pipe_available`, one `PeekNamedPipe` call, for the app's control pipe, which
-reads a synchronous pipe and has no other bounded way to. A WSL bridge's stream is
-the same type over two private pipes the crate creates for the child's stdin and
-stdout, overlapped on this end, with the same deadlines; the standard library's
+reads a synchronous pipe and has no other bounded way to. An SSH or WSL bridge's
+stream is the same type over two private pipes the crate creates for the child's
+stdin and stdout, overlapped on this end, with the same deadlines; the standard library's
 `Stdio::piped` ends are not documented to be overlapped.
 If adapting a typed error to that callback, use
 `io::Error::new(error.kind(), error)`, not `error.to_string()`, to retain sources.
@@ -259,8 +258,19 @@ Each read turn drains one progressing frame for at most 128 reads (1 MiB) or
 10 ms, stopping immediately on a read without progress. This avoids retrying a
 blocked write before every 8 KiB of a large inbound frame, without starving
 outbound progress or cancellation when a peer sends slowly or stops mid-frame.
-An inbound partial frame fences new outbound commands, but an already-started
-outbound frame continues in bounded chunks to avoid a full-duplex stall. No command
+An inbound partial frame fences state-dependent outbound commands. On Unix,
+explicit input to the latest focused pane can proceed after a complete, bounded
+raw surface identity header matches the authoritative snapshot and a validated
+retained surface. This exception is limited to 4 KiB encoded commands, preserves
+FIFO, and excludes popups, API requests, images, unknown headers, and changed
+boot/projection identities. Already-readable body bytes are drained first;
+strict full-body validation still controls surface publication and disconnection.
+Such input is written in bounded steps, so a peer still sending its frame cannot
+stall the worker: once attempted, it waits as the one held command for room in
+the socket (60-second deadline), reads continue, and once on the wire it
+finishes before any other bytes, including health probes.
+Windows retains the full inbound barrier. An already-started outbound frame
+continues in bounded chunks to avoid a full-duplex stall. No command
 or health frame can interleave with a partial image. Health probes are deferred
 during partial writes; the image has an absolute 60-second write deadline.
 Dropping a pending permit or cancelling before any bytes are written skips the
@@ -307,7 +317,15 @@ not execute escape sequences, read graphics file paths, or mutate the clipboard.
 - One dedicated thread owns connect, handshake, ordered writes, and reads.
 - 64 channel-queued commands plus one worker-held command, 8 ordered events,
   and one in-flight API request. A waiting request holds later commands in FIFO
-  order until the preceding response is complete. Events
+  order until the preceding response is complete. The one exception is a
+  `client_shell.surface.set` queued directly behind `pane.focus`, `tab.focus`, or
+  `workspace.focus`: Herdr applies that focus synchronously and handles surface
+  activation before its busy check, so the activation follows unacknowledged.
+  Its response is delivered after the focus response. If a daemon refuses it as
+  `endpoint_busy`, it is resent once after focus completes and the connection
+  stops pipelining; focus is never resent. No capability promises this
+  ordering, so only stable Herdr 0.9.0 through 0.9.5, whose sources were
+  checked, pipeline it; other versions keep the serialized order. Events
   use backpressure rather than losing snapshots, input, patches, or responses.
 - 2 MiB ordinary outbound payload cap; clipboard images alone allow 16 MiB of
   data plus 2048 bytes of bounded envelope overhead. 32 MiB inbound cap (semantic
@@ -358,10 +376,19 @@ them atomically, then emits a complete immutable `Surface`, not a GUI patch.
 Only surfaces matching the latest snapshot's projection revision are emitted.
 Future surfaces (including subsequent patches) are retained and emitted after
 their matching snapshot arrives.
-When handling a new snapshot, the GUI should invalidate any displayed surface
-whose `(boot_id, projection_revision)` differs from `(boot_id, revision)` and
-wait for matching content. Snapshot metadata and cells must not be mixed across
-focus changes. Full surfaces can skip surface revisions; patches cannot.
+The GUI keeps a matching snapshot/surface pair on screen while staging one newer
+metadata-only snapshot. Input still targets that displayed pane or popup. A
+matching surface commits the new pair and its image catalog together. Changes
+to boot, focus, displayed pane topology, zoom, keybindings or commands invalidate
+the pair immediately; navigation and activation retain their ordered barriers.
+Snapshot metadata and cells are never mixed across revisions. Full surfaces can
+skip surface revisions; patches cannot.
+
+Popup ownership and geometry are carried by surfaces, not snapshot revisions.
+As in the native TUI, an externally opened popup can therefore precede its
+presentation: the daemon silently drops blocked pane input and input for retired
+popup IDs. The GUI never redirects or replays that input into a new target.
+GUI-initiated commands retain the surface barrier before accepting more input.
 
 Herdr sends an image's bytes only in the first surface that places it, so the
 worker, which sees every surface, keeps them: each received surface's
@@ -452,14 +479,24 @@ another process took first is never reported. It reports
 every port is refused, or the master does not connect within 30 seconds.
 `stop`, or dropping the handle, kills the master without waiting; the worker
 reaps it and removes its directory. Nothing reconnects. Callers name the remote
-port, so discovery stays elsewhere. Windows returns `Error::SshUnsupported`.
+port, so discovery stays elsewhere. Windows OpenSSH has no control master, so
+there `PortForward::start` returns `Error::SshUnsupported`; `forward_command`,
+which holds its forward in its own child, works on Windows too.
 
-Limitations: POSIX remote hosts only, reachable from a Unix client only. The
-bridge hands the `ssh` child a socket pair as its standard streams, which needs
-`OwnedFd`; a Windows client therefore validates the target and session and then
-returns `Error::SshUnsupported` without spawning anything. There is no Windows
-remote discovery, interactive bootstrap/install/upgrade, version-specific mise
-install scanning, or retry/replay.
+On Unix the bridge hands the `ssh` child one end of a socket pair as its
+standard streams. On Windows it gives the child a private pipe each way,
+driven with the same overlapped read and write deadlines as the daemon's named
+pipe, so the handshake, its 16 KiB banner bound, cancellation, and the session
+loop behave the same. `ssh` and `ssh-keygen` are
+OpenSSH for Windows from `%SystemRoot%\System32\OpenSSH`, or without it the
+first absolute `PATH` directory that has them (never Git's MSYS `ssh` ahead of
+the system copy), started without a console window. Every
+command there also passes `ControlPath=none`: Windows OpenSSH cannot share a
+connection, and a configured `ControlPath` fails each one with exit 127, which
+would read as a host without Herdr.
+
+Limitations: there is no interactive bootstrap/install/upgrade,
+version-specific mise install scanning, or retry/replay.
 Shell-initialized PATH entries unavailable to `/bin/sh` are not discovered unless
 covered by the known roots. The remote bridge itself can start the named daemon,
 as upstream does; disconnect only detaches and never stops the remote daemon.
@@ -471,7 +508,8 @@ POSIX script locally or over a saved SSH target. `run_script_command(Command,
 input, output, ScriptLimits, cancelled)` accepts an already-prepared command for
 provider-specific transports. The caller supplies authentication, quotes the
 remote command, and keeps temporary credential files alive through the call.
-Both are blocking background-worker APIs for Linux and macOS, with bounded
+Both are blocking background-worker APIs for Linux, macOS, and Windows, where
+the local host is refused since it has no `/bin/sh`; all have bounded
 streaming output, an idle deadline, cancellation, and owned-child cleanup.
 Provider preparation failures can retain their typed I/O cause in
 `Error::ScriptConnect`; script execution retains the existing script error types.

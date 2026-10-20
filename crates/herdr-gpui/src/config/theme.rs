@@ -3,9 +3,11 @@
 use super::{Config, config_root, home, omarchy};
 use crate::{Error, Result, contrast::Contrast, error::ThemeParseError};
 use std::{
+    collections::HashSet,
     env, fs,
     io::ErrorKind,
     path::{Component, Path, PathBuf},
+    sync::LazyLock,
 };
 
 const FOLLOW_HERDR: &str = "Follow Herdr";
@@ -95,10 +97,17 @@ fn theme_directories() -> Result<Vec<PathBuf>> {
     } else if let Ok(home) = home() {
         directories.push(home.join(".local/share/ghostty/themes"));
     }
-    let data_dirs = env::var_os("XDG_DATA_DIRS")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-    directories.extend(env::split_paths(&data_dirs).map(|dir| dir.join("ghostty/themes")));
+    match env::var_os("XDG_DATA_DIRS").filter(|value| !value.is_empty()) {
+        Some(data_dirs) => {
+            directories.extend(env::split_paths(&data_dirs).map(|dir| dir.join("ghostty/themes")))
+        }
+        // The XDG default names Unix folders. Joined as one `:` list, Windows
+        // would split it on `;` into a single invalid path.
+        None if cfg!(unix) => directories.extend(
+            ["/usr/local/share", "/usr/share"].map(|dir| Path::new(dir).join("ghostty/themes")),
+        ),
+        None => {}
+    }
     Ok(directories)
 }
 
@@ -125,7 +134,7 @@ impl Config {
         for directory in directories {
             let entries = match fs::read_dir(directory) {
                 Ok(entries) => entries,
-                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) if missing(&error) => continue,
                 Err(error) => return Err(Error::from(error).at_path(directory)),
             };
             for entry in entries {
@@ -144,6 +153,14 @@ impl Config {
             }
         }
         let selected = ThemeName::parse(&self.theme).unwrap_or(ThemeName::Single(&self.theme));
+        // A built-in, or the first directory's copy (the one `resolve` loads),
+        // stands for every spelling of a theme an installed Ghostty also
+        // ships. The selected theme stays listed under the name it was saved as.
+        let mut seen = HashSet::new();
+        names.retain(|name| {
+            seen.insert(theme_key(name))
+                || [selected.get(true), selected.get(false)].contains(&name.as_str())
+        });
         for selected in [selected.get(true), selected.get(false)] {
             if Path::new(selected).is_absolute() || selected.starts_with("~/") {
                 names.push(selected.to_owned());
@@ -158,7 +175,7 @@ impl Config {
     /// `light:…,dark:…` value, and Herdr's light palette for `Follow Herdr`.
     pub fn theme(&self, light: bool) -> Result<Theme> {
         self.theme_with_directories(light, theme_directories)
-            .map(|theme| theme.with_contrast(self.contrast))
+            .map(|theme| self.styled(theme))
     }
 
     /// Resolves every side, so a pair is refused before it is saved rather
@@ -182,7 +199,13 @@ impl Config {
     /// appearance and with this config's contrast. Reads theme files, so it
     /// runs off the UI thread.
     pub(crate) fn theme_named(&self, value: &str, light: bool) -> Result<Theme> {
-        resolve(value, light, theme_directories).map(|theme| theme.with_contrast(self.contrast))
+        resolve(value, light, theme_directories).map(|theme| self.styled(theme))
+    }
+
+    /// `theme` with this config's contrast and accent; see
+    /// [`Theme::styled_for`].
+    fn styled(&self, theme: Theme) -> Theme {
+        theme.styled_for(self)
     }
 }
 
@@ -268,7 +291,7 @@ fn theme_file(name: &str, directories: impl FnOnce() -> Result<Vec<PathBuf>>) ->
         match fs::metadata(&candidate) {
             Ok(metadata) if metadata.is_file() => return Ok(candidate),
             Ok(_) => {}
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) if missing(&error) => {}
             Err(error) => return Err(Error::from(error).at_path(&candidate)),
         }
     }
@@ -297,6 +320,9 @@ pub struct Theme {
     pub palette: [u32; 256],
     /// Applied by [`Theme::with_contrast`]; every theme loads as `Standard`.
     pub contrast: Contrast,
+    /// The system accent standing in for the theme's, from
+    /// [`Theme::with_accent`]; every theme loads without one.
+    pub system_accent: Option<u32>,
 }
 
 impl Default for Theme {
@@ -328,6 +354,7 @@ impl Default for Theme {
             accent: None,
             palette,
             contrast: Contrast::Standard,
+            system_accent: None,
         }
     }
 }
@@ -342,19 +369,95 @@ pub(crate) fn mix(base: u32, over: u32, percent: u32) -> u32 {
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
-impl Theme {
-    pub const BUILTIN_NAMES: &'static [&'static str] = &[
-        "Default",
-        "Nord",
-        "Dracula",
-        "Catppuccin Mocha",
-        "Catppuccin Latte",
-    ];
+/// Popular Ghostty theme files compiled in from iTerm2-Color-Schemes (see
+/// `THEMES-NOTICE.md`), so every platform lists them without Ghostty. Each
+/// keeps its upstream file name, which is how an installed copy is matched.
+macro_rules! bundled_themes {
+    ($($name:literal),* $(,)?) => {
+        const BUNDLED: &[(&str, &str)] = &[$((
+            $name,
+            include_str!(concat!("../../../../assets/themes/", $name)),
+        )),*];
 
+        impl Theme {
+            pub const BUILTIN_NAMES: &'static [&'static str] = &[
+                "Default",
+                "Nord",
+                "Dracula",
+                "Catppuccin Mocha",
+                "Catppuccin Latte",
+                $($name),*
+            ];
+        }
+    };
+}
+
+bundled_themes![
+    "Atom One Dark",
+    "Atom One Light",
+    "Ayu Mirage",
+    "Catppuccin Frappe",
+    "Catppuccin Macchiato",
+    "Everforest Dark Med",
+    "GitHub Dark Default",
+    "GitHub Light Default",
+    "Gruvbox Dark",
+    "Gruvbox Light",
+    "Gruvbox Material Dark",
+    "Kanagawa Wave",
+    "Material",
+    "Monokai Classic",
+    "Monokai Pro",
+    "Monokai Pro Light",
+    "Night Owl",
+    "Nightfox",
+    "One Half Dark",
+    "One Half Light",
+    "Rose Pine",
+    "Rose Pine Dawn",
+    "Rose Pine Moon",
+    "Snazzy",
+    "TokyoNight",
+    "TokyoNight Moon",
+    "TokyoNight Storm",
+    "Tomorrow Night",
+];
+
+/// Bundled themes parsed once; the picker and menus resolve built-ins often.
+static BUNDLED_THEMES: LazyLock<Vec<(&str, Theme)>> = LazyLock::new(|| {
+    BUNDLED
+        .iter()
+        .filter_map(|(name, text)| Some((*name, Theme::parse_ghostty(text).ok()?)))
+        .collect()
+});
+
+/// How a theme name compares for duplicates: Ghostty's older files spell the
+/// same theme `tokyonight` or `catppuccin-mocha` where newer ones say
+/// `TokyoNight` and `Catppuccin Mocha`. Other punctuation, such as the `+`
+/// of `Dracula+`, still tells themes apart.
+pub(super) fn theme_key(name: &str) -> String {
+    name.chars()
+        .filter(|character| !matches!(character, ' ' | '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+impl Theme {
     /// The theme's primary accent, used for selection colors that must read as
-    /// chosen rather than merely hovered.
+    /// chosen rather than merely hovered: the system's when asked for, else
+    /// the theme's own, else its palette's magenta.
     pub fn primary(&self) -> u32 {
-        self.accent.unwrap_or(self.palette[5])
+        self.system_accent
+            .or(self.accent)
+            .unwrap_or(self.palette[5])
+    }
+
+    /// Uses the system's `accent`, when there is one, as [`Self::primary`].
+    /// Terminal colors, including the palette slot the theme's accent comes
+    /// from, stay as the theme drew them.
+    pub fn with_accent(mut self, accent: Option<u32>) -> Self {
+        self.system_accent = accent;
+        self
     }
 
     /// The sidebar's fill: Herdr's `sidebar_bg` when set, else the surface.
@@ -408,9 +511,23 @@ impl Theme {
         )
     }
 
+    /// The theme as `config` shows it: its contrast, raised while a Windows
+    /// contrast theme is on, and the system accent when `accent = "system"`.
+    /// Every theme the app paints goes through this, whatever loaded it, so
+    /// a shared Herdr theme or a Settings draft looks as a configured one.
+    pub(crate) fn styled_for(self, config: &Config) -> Self {
+        self.with_contrast(config.contrast.or_system())
+            .with_accent(config.accent.color())
+    }
+
     /// High contrast parts selected rows further from the surface and raises
     /// dim labels to text contrast. Standard leaves the theme as drawn.
+    /// Applying the level the theme already has changes nothing, so a theme
+    /// styled once and styled again is not raised twice.
     pub fn with_contrast(mut self, contrast: Contrast) -> Self {
+        if self.contrast == contrast {
+            return self;
+        }
         self.contrast = contrast;
         if contrast == Contrast::High {
             self.active = mix(self.active, self.foreground, 12);
@@ -427,7 +544,7 @@ impl Theme {
     }
 
     pub(crate) fn builtin(name: &str) -> Option<Self> {
-        // Small hand-authored palettes; no external theme assets are bundled.
+        // Small hand-authored palettes, then the bundled Ghostty files.
         let (background, foreground, ansi) = match name {
             "Default" => return Some(Self::default()),
             "Nord" => (
@@ -462,7 +579,12 @@ impl Theme {
                     0x6c6f85, 0xd20f39, 0x40a02b, 0xdf8e1d, 0x1e66f5, 0xea76cb, 0x179299, 0xbcc0cc,
                 ],
             ),
-            _ => return None,
+            _ => {
+                return BUNDLED_THEMES
+                    .iter()
+                    .find(|(bundled, _)| *bundled == name)
+                    .map(|(_, theme)| theme.clone());
+            }
         };
         let mut theme = Self {
             background,
@@ -529,4 +651,14 @@ impl Theme {
         theme.derive_chrome();
         Ok(theme)
     }
+}
+
+/// A theme directory that cannot exist here: absent, or a name this platform
+/// rejects, such as a Unix `XDG_DATA_DIRS` list inherited by a Windows process.
+/// Neither hides the other directories' themes.
+fn missing(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::NotFound | ErrorKind::InvalidFilename
+    )
 }

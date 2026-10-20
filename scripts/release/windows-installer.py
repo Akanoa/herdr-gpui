@@ -15,11 +15,14 @@
       task, check the files, their subsystems, herdr-gpui.exe's output, the
       app's name, the Start menu shortcut's AppUserModelID and target (the
       launcher), the user PATH, and the entry Settings lists under Installed
-      apps, then uninstall and check all of it is gone again. With --signed,
+      apps; run it again as the in-app update does and check it starts the
+      app; write the startup entry Launch at login would, marked off in
+      Startup apps; then uninstall and check all of it is gone again. With --signed,
       also require valid timestamped signatures from one signer on the
       installer and on everything it installed that runs, the uninstaller
-      included. Changes this user's PATH and Start menu shortcut while it
-      runs: for CI runners only. Under a
+      included. Changes this user's PATH and Start menu shortcut, and opens
+      the app (which may start a Herdr daemon), while it runs: for CI runners
+      only. Under a
       process a packaged (MSIX) app started, Windows redirects HKCU into that
       app's private hive, so the checks pass while Settings and new terminals
       see neither entry.
@@ -157,6 +160,68 @@ def check_uninstall_entry(app):
         raise ValueError(f"Uninstall entry does not run the uninstaller: {entry}")
 
 
+def link_handler():
+    """The command Windows runs for a herdr-gpui:// link, or None when the
+    scheme is not registered for this user."""
+    import winreg
+    name = r"Software\Classes\herdr-gpui"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, name) as key:
+            winreg.QueryValueEx(key, "URL Protocol")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, name + r"\shell\open\command") as key:
+            return winreg.QueryValueEx(key, "")[0]
+    except FileNotFoundError:
+        return None
+
+
+FOLDER_VERBS = (r"Software\Classes\Directory\shell\HerdrUI",
+                r"Software\Classes\Directory\Background\shell\HerdrUI")
+
+
+def folder_verbs():
+    """The commands of the "Open in Herdr UI" folder verbs that exist for
+    this user."""
+    import winreg
+    commands = []
+    for name in FOLDER_VERBS:
+        try:
+            commands.append(winreg.QueryValue(winreg.HKEY_CURRENT_USER, name + r"\command"))
+        except FileNotFoundError:
+            pass
+    return commands
+
+
+# Where Settings > General > Launch at login, and Task Manager's Startup apps
+# switch, name the app; the installer creates neither and removes both.
+STARTUP_KEYS = (r"Software\Microsoft\Windows\CurrentVersion\Run",
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run")
+
+
+def startup_entries():
+    """Which of STARTUP_KEYS have a Herdr UI value."""
+    import winreg
+    found = []
+    for name in STARTUP_KEYS:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, name) as key:
+                winreg.QueryValueEx(key, "Herdr UI")
+            found.append(name)
+        except FileNotFoundError:
+            pass
+    return found
+
+
+def enable_startup(launcher):
+    """Write the entry as Launch at login does, then mark it off as Task
+    Manager does (an odd first byte), for the uninstaller to remove."""
+    import winreg
+    run, approved = STARTUP_KEYS
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, run) as key:
+        winreg.SetValueEx(key, "Herdr UI", 0, winreg.REG_SZ, f'"{launcher}"')
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, approved) as key:
+        winreg.SetValueEx(key, "Herdr UI", 0, winreg.REG_BINARY, bytes([3]) + bytes(11))
+
+
 def check_signed(paths):
     spec = importlib.util.spec_from_file_location("windows_signing", ROOT / "scripts/release/windows-signing.py")
     signing = importlib.util.module_from_spec(spec)
@@ -202,6 +267,8 @@ def smoke(installer, signed=False):
         # uninstall entry never point into the deleted scratch directory.
         try:
             check_installation(app, installer if signed else None)
+            check_update_relaunches(installer, app)
+            enable_startup(app / "herdr-gpui-launcher.exe")
         finally:
             uninstall(app)
 
@@ -230,6 +297,48 @@ def check_installation(app, signed_installer):
     if str(app).lower() not in user_path_entries():
         raise ValueError("Installer did not add the app directory to the user PATH")
     check_uninstall_entry(app)
+    handler = link_handler()
+    if handler != f'"{launcher}" "%1"':
+        raise ValueError(f"Installer registered herdr-gpui:// links wrongly: {handler}")
+    verbs = folder_verbs()
+    if verbs != [f'"{launcher}" open "%V"'] * len(FOLDER_VERBS):
+        raise ValueError(f"Installer registered Open in Herdr UI wrongly: {verbs}")
+    # Launch at login is off until the user turns it on.
+    if startup_entries():
+        raise ValueError(f"Installer wrote a startup entry: {startup_entries()}")
+
+
+def processes_at(path):
+    """Ids of running processes started from exactly `path`."""
+    query = ("Get-CimInstance Win32_Process -Filter \"Name='herdr-gpui.exe'\" | "
+             f"Where-Object ExecutablePath -eq '{path}' | ForEach-Object ProcessId")
+    output = subprocess.run(["powershell", "-NoProfile", "-Command", query],
+                            capture_output=True, text=True, check=True, timeout=60).stdout
+    return [int(line) for line in output.split()]
+
+
+def stop_processes_at(path):
+    for pid in processes_at(path):
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=60)
+
+
+def check_update_relaunches(installer, app):
+    """Run Setup over the installation as the app's in-app update does
+    (updater/windows.rs), and require it to start the app again."""
+    gui = app / "herdr-gpui.exe"
+    if processes_at(gui):
+        raise ValueError("A silent install started the app without /RELAUNCH=1")
+    subprocess.run([str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                    "/CLOSEAPPLICATIONS", "/RELAUNCH=1", f"/DIR={app}",
+                    f"/LOG={app.parent / 'update.log'}"], check=True, timeout=600)
+    try:
+        deadline = time.monotonic() + 60
+        while not processes_at(gui):
+            if time.monotonic() > deadline:
+                raise ValueError("Setup with /RELAUNCH=1 did not start the updated app")
+            time.sleep(1)
+    finally:
+        stop_processes_at(gui)
 
 
 def uninstall(app):
@@ -240,10 +349,12 @@ def uninstall(app):
     shortcut = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Herdr UI.lnk"
     deadline = time.monotonic() + 120
     while (app.exists() or shortcut.exists() or entry in user_path_entries()
-           or uninstall_entry() is not None):
+           or uninstall_entry() is not None or link_handler() is not None
+           or folder_verbs() or startup_entries()):
         if time.monotonic() > deadline:
             raise ValueError("Uninstaller left the app directory, its shortcut, its PATH entry, "
-                             "or its Uninstall entry behind")
+                             "its Uninstall entry, its link handler, Open in Herdr UI, "
+                             "or its startup entry behind")
         time.sleep(1)
 
 

@@ -63,7 +63,7 @@ impl SettingsWindow {
         div()
             .flex()
             .flex_col()
-            .child(ui::section(theme, "Items", Some(ui::Source::Local)))
+            .child(ui::section(theme, "Items", Some(ui::Source::HerdrUi)))
             .child(
                 ui::row(theme, "status-usage", "Usage")
                     .description(
@@ -78,7 +78,7 @@ impl SettingsWindow {
                         Edit::Usage,
                         cx,
                     ))
-                    .control(
+                    .switch(
                         ui::toggle(theme, "status-usage-toggle", usage, true).on_click(
                             cx.listener(move |this, _, _, cx| {
                                 this.save_native(move || Config::save_usage_visibility(!usage), cx);
@@ -96,7 +96,7 @@ impl SettingsWindow {
                         Edit::SystemLoad,
                         cx,
                     ))
-                    .control(self.preference_toggle(
+                    .switch(self.preference_toggle(
                         "status-system-load-toggle",
                         system_load,
                         Preference::ShowSystemLoad(!system_load),
@@ -109,7 +109,7 @@ impl SettingsWindow {
                         "Times one TCP connect to 1.1.1.1:443 every 15 seconds from this \
                          machine, about a megabyte a day.",
                     )
-                    .control(self.preference_toggle(
+                    .switch(self.preference_toggle(
                         "status-network-quality-toggle",
                         network_quality,
                         Preference::ShowNetworkQuality(!network_quality),
@@ -136,7 +136,7 @@ impl SettingsWindow {
                             )
                         }),
                     ))
-                    .control(self.preference_toggle(
+                    .switch(self.preference_toggle(
                         "status-keep-awake-toggle",
                         keep_awake,
                         Preference::StatusBar(Edit::KeepAwake(!keep_awake)),
@@ -198,12 +198,7 @@ impl SettingsWindow {
                     this.save_preference(Preference::StatusBar(edit(choice)), cx)
                 }),
             ))
-            .control(self.preference_toggle(
-                toggle,
-                shown,
-                Preference::StatusBar(edit(toggled)),
-                cx,
-            ))
+            .switch(self.preference_toggle(toggle, shown, Preference::StatusBar(edit(toggled)), cx))
     }
 }
 

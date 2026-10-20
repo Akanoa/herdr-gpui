@@ -6,7 +6,7 @@
 
 use super::{
     super::{
-        agents::{status_style, status_symbol},
+        agents::{icon_mark, status_style},
         cell::{AgentRow, RowContext, RowLayout, RowState, WorkspaceRow},
         line_height,
         row::{
@@ -87,7 +87,7 @@ fn shell(key: &str, state: RowState, indent: f32, line: Line<'_>, cx: &RowContex
 }
 
 /// The icon slot, with the status as a dot pinned to its top right corner in
-/// `dot`'s color, bold where symbols allow. `None` draws no dot. The dot stays
+/// `dot`'s color. `None` draws no dot. The dot stays
 /// inside the slot: the slot sets the line's height and the line clips, so a
 /// dot that overhangs the slot loses its top.
 fn slot(
@@ -101,10 +101,12 @@ fn slot(
     // Tiles tint the whole slot instead of badging a corner: the slot is
     // already the tile, and the icon inside it stays readable.
     let tile = dot
-        .filter(|_| cx.indicators.icons == Some(StatusIcons::Tiles))
+        .filter(|_| cx.indicators.icons == StatusIcons::Tiles)
         .map(|(color, _)| color);
-    let dot = dot.filter(|_| tile.is_none()).map(|(color, bold)| {
-        if let Some(icons) = cx.indicators.icons {
+    // A configured weight has nothing to thicken on a badge.
+    let dot = dot.filter(|_| tile.is_none()).map(|(color, _bold)| {
+        let icons = cx.indicators.icons;
+        if icons != StatusIcons::Dots {
             let diameter = (m.icon * 0.55).round();
             return div()
                 .debug_selector(|| format!("dot-{key}"))
@@ -117,35 +119,34 @@ fn slot(
                 .justify_center()
                 .rounded_full()
                 .bg(rgb(theme.sidebar_background()))
-                .child(
-                    svg()
-                        .path(crate::icons::status_icon(icons, status))
-                        .size(px(diameter))
-                        .text_color(rgb(color)),
-                );
+                .child(icon_mark(
+                    icons,
+                    status,
+                    diameter,
+                    color,
+                    cx.status_indicators().fade(),
+                ));
         }
-        if cx.indicators.style == crate::herdr_settings::IndicatorStyle::Symbols {
-            // A full row-status slot masks the underlying icon. Symbols here
-            // are corner badges, leaving the icon's center unobscured.
-            let diameter = (m.icon * 0.45).round();
+        let (diameter, filled, _) = status_style(status, theme);
+        // A working dot turns in the dot's own place, so the badge stays clear
+        // of the icon's center.
+        if status == AgentStatus::Working {
             return div()
-                .size(px(diameter))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(diameter))
-                .line_height(px(diameter))
-                .text_color(rgb(color))
-                .when(bold, |badge| badge.font_weight(FontWeight::BOLD))
-                .child(status_symbol(status))
                 .debug_selector(|| format!("dot-{key}"))
                 .absolute()
                 .top_0()
                 .right_0()
+                .size(px(diameter))
                 .rounded_full()
-                .bg(rgb(theme.sidebar_background()));
+                .bg(rgb(theme.sidebar_background()))
+                .child(icon_mark(
+                    StatusIcons::Dots,
+                    status,
+                    diameter,
+                    color,
+                    cx.status_indicators().fade(),
+                ));
         }
-        let (diameter, filled, _) = status_style(status, theme);
         div()
             .debug_selector(|| format!("dot-{key}"))
             .absolute()
@@ -227,6 +228,7 @@ impl RowLayout for Superset {
                 cx.look.density.card_indent()
             };
         let pr = badge.as_ref().and_then(|badge| badge.pr.as_ref());
+        let changes = badge.as_ref().and_then(|badge| badge.counts.as_ref());
         let dirty = badge.as_ref().is_some_and(|badge| badge.dirty);
         let teleported = badge.as_ref().is_some_and(|badge| badge.teleported);
         let dirty_size = (line_height(cx.font) * 0.75).round().min(15.);
@@ -300,11 +302,19 @@ impl RowLayout for Superset {
             .when(teleported, |line| {
                 line.fixed(dirty_size, parts::teleported(label, dirty_size, theme))
             })
-            .when(dirty, |line| {
-                line.fixed(dirty_size, parts::dirty(label, dirty_size, theme))
-            })
-            .when_some(pr, |line, pr| {
-                let (width, counts) = parts::pr_counts(label, pr, m.glyph, counts);
+            // Local counts take the dirty mark's place, in a chip of its hue.
+            .when(
+                dirty && !changes.is_some_and(|changes| changes.local),
+                |line| line.fixed(dirty_size, parts::dirty(label, dirty_size, theme)),
+            )
+            .when_some(changes, |line, changes| {
+                if changes.local {
+                    let (glyph, icon) = (m.glyph, (dirty_size * 0.8).round());
+                    let chip = changes.chip(label, glyph, icon, counts, theme);
+                    return line
+                        .shrink(changes.chip_width(glyph, icon), chip.text_size(px(m.small)));
+                }
+                let (width, counts) = parts::counts(label, changes, m.glyph, counts);
                 line.shrink(width, counts.text_size(px(m.small)))
             })
             .when_some(fold, |line, fold| {
@@ -340,14 +350,28 @@ impl RowLayout for Superset {
             });
             return shell(key, state, 0., line, cx);
         }
-        // Where the agent runs trails its name, never over half the row.
+        // The agent's pane, then where it runs, trail its name, each never over
+        // half the row.
         let line = line
-            .fill(
+            .lead(
                 div()
                     .debug_selector(|| format!("name-{key}"))
                     .text_color(rgb(color)),
                 agent.name,
+                glyph_at(cx.font, cx.font.size),
+                0.4,
             )
+            .when_some(agent.pane, |line, pane| {
+                line.label(
+                    div()
+                        .debug_selector(|| format!("pane-{key}"))
+                        .text_size(px(m.small))
+                        .text_color(rgb(theme.muted)),
+                    pane,
+                    m.glyph,
+                    0.5,
+                )
+            })
             .when_some(parts::agent_place(agent.place, cx.host), |line, place| {
                 line.label(
                     div()
@@ -360,14 +384,14 @@ impl RowLayout for Superset {
                 )
             })
             .when_some(agent.status_text.as_deref(), |line, text| {
-                line.label(
+                line.keep(
                     div()
                         .debug_selector(|| format!("status-{key}"))
                         .text_size(px(m.small))
                         .text_color(rgb(cx.indicators.color(agent.status))),
                     text,
                     m.glyph,
-                    0.5,
+                    0.3,
                 )
             });
         shell(key, state, 0., line, cx)
@@ -398,7 +422,13 @@ mod tests {
             weight: gpui::FontWeight::NORMAL,
         };
         let theme = Theme::default();
-        let indicators = Indicators::new(None, None, false, &theme);
+        let indicators = Indicators::new(
+            None,
+            crate::config::StatusIcons::default(),
+            false,
+            false,
+            &theme,
+        );
         let cx = RowContext {
             indicators,
             font: &font,

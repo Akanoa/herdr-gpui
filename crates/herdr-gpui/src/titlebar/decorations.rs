@@ -126,6 +126,16 @@ pub(crate) fn client(window: &Window) -> bool {
     matches!(window.window_decorations(), Decorations::Client { .. })
 }
 
+/// Whether the app draws its own window control buttons (minimize, maximize,
+/// close) in the menu bar. True for client-decorated windows where the buttons
+/// are needed, or when the user explicitly enables them. With server-side
+/// decorations minimize/maximize may not work on some compositors (GNOME
+/// Wayland ignores client requests), but close and the user's choice to show
+/// them are respected.
+pub(crate) fn show_controls(enabled: bool, window: &Window) -> bool {
+    enabled || client(window)
+}
+
 /// Which buttons to draw, from what the compositor says it supports. Close
 /// is always offered, since nothing else on screen can close the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,11 +146,15 @@ struct Buttons {
 }
 
 impl Buttons {
-    fn of(window: &Window) -> Option<Self> {
+    fn of(enabled: bool, window: &Window) -> Option<Self> {
         let controls = window.window_controls();
-        client(window).then(|| Self {
-            minimize: controls.minimize,
-            maximize: controls.maximize,
+        // When the user explicitly enables window controls, show all three
+        // buttons regardless of what the WM reports. The WM-reported controls
+        // only matter for client-decorated windows where the compositor decides.
+        let force_all = enabled;
+        show_controls(enabled, window).then(|| Self {
+            minimize: force_all || controls.minimize,
+            maximize: force_all || controls.maximize,
             maximized: window.is_maximized(),
         })
     }
@@ -150,11 +164,12 @@ impl Buttons {
 /// bar of a client-decorated window. `close` runs the window's own close
 /// path, so a window that asks before closing still asks.
 pub(crate) fn controls(
+    enabled: bool,
     window: &Window,
     theme: &crate::config::Theme,
     close: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Option<AnyElement> {
-    Buttons::of(window).map(|buttons| render_controls(buttons, theme, close))
+    Buttons::of(enabled, window).map(|buttons| render_controls(buttons, theme, close))
 }
 
 fn render_controls(
@@ -163,10 +178,13 @@ fn render_controls(
     close: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let (active, foreground) = (theme.active, theme.foreground);
-    let button = |id: &'static str, icon: &'static str| {
+    // `label` is what a screen reader calls the button.
+    let button = |id: &'static str, icon: &'static str, label: &'static str| {
         div()
             .id(id)
             .debug_selector(move || id.into())
+            .role(Role::Button)
+            .aria_label(label)
             .flex_none()
             .size(px(28.))
             .flex()
@@ -175,6 +193,8 @@ fn render_controls(
             .rounded_full()
             .cursor_pointer()
             .hover(move |style| style.bg(rgb(active)))
+            // Stop the press from bubbling to the movable bar, which would start
+            // a window move instead of letting the button's click fire.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(svg().path(icon).size(px(14.)).text_color(rgb(foreground)))
     };
@@ -190,25 +210,29 @@ fn render_controls(
         .h_full()
         .when(buttons.minimize, |bar| {
             bar.child(
-                button("window-minimize", "icons/window-minimize.svg").on_click(|_, window, cx| {
-                    cx.stop_propagation();
-                    window.minimize_window();
-                }),
+                button("window-minimize", "icons/window-minimize.svg", "Minimize").on_click(
+                    |_, window, cx| {
+                        cx.stop_propagation();
+                        window.minimize_window();
+                    },
+                ),
             )
         })
         .when(buttons.maximize, |bar| {
-            let icon = if buttons.maximized {
-                "icons/window-restore.svg"
+            let (icon, label) = if buttons.maximized {
+                ("icons/window-restore.svg", "Restore")
             } else {
-                "icons/window-maximize.svg"
+                ("icons/window-maximize.svg", "Maximize")
             };
-            bar.child(button("window-maximize", icon).on_click(|_, window, cx| {
-                cx.stop_propagation();
-                window.zoom_window();
-            }))
+            bar.child(
+                button("window-maximize", icon, label).on_click(|_, window, cx| {
+                    cx.stop_propagation();
+                    window.zoom_window();
+                }),
+            )
         })
         .child(
-            button("window-close", "icons/close.svg").on_click(move |_, window, cx| {
+            button("window-close", "icons/close.svg", "Close").on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 close(window, cx);
             }),

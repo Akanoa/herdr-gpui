@@ -418,10 +418,28 @@ impl<'a> Probe<'a> {
         }
     }
 
-    /// A macOS keychain item's password on the probed host.
-    /// A macOS keychain generic password on the probed host (`security -w`).
+    /// A macOS keychain generic password on the probed host (`security -w`),
+    /// for an item `security` may read without asking, such as one its owner
+    /// wrote with the `security` tool itself, as Claude Code does.
     pub fn keychain(&mut self, service: &str, account: Option<&str>) -> Option<Secret> {
         self.security("find-generic-password", service, account)
+    }
+
+    /// Whether the probe may touch data another app keeps for itself on this
+    /// Mac, such as its folder under `~/Library/Application Support`, either
+    /// directly or through a command it runs. macOS counts a child's reads
+    /// against Herdr and may ask whether Herdr can access data from other
+    /// apps, so a detected provider leaves that data alone.
+    ///
+    /// Unlike a [`Probe::foreign_keychain`] read, a listed provider is not
+    /// held back for Allow ([`Consent::Ask`]): listing it is the consent. The
+    /// panel's Allow grants Keychain access and says so, while this dialog is
+    /// macOS's own, asked once per app and remembered by macOS, so there is
+    /// no refusal for Herdr to remember either. And unlike a keychain read,
+    /// remote hosts are unchanged: no such dialog reaches the user from an
+    /// SSH session, whereas a foreign Keychain item is gated on every host.
+    pub fn app_data(&self) -> bool {
+        self.requested() || self.is_remote() || !cfg!(target_os = "macos")
     }
 
     /// A macOS keychain internet password that another app owns, such as an
@@ -534,6 +552,13 @@ impl<'a> Probe<'a> {
     }
 
     fn reveal(&mut self, secret: &Secret) -> Option<String> {
+        let text = self.reveal_exact(secret)?;
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
+    }
+
+    /// The secret's text as the host holds it, surrounding whitespace kept.
+    fn reveal_exact(&mut self, secret: &Secret) -> Option<String> {
         let text = match (&mut *self.exec, &secret.0) {
             (_, Held::Here(value)) => value.expose_secret().to_owned(),
             (Exec::Remote(shell), Held::There(variable)) => {
@@ -545,8 +570,7 @@ impl<'a> Probe<'a> {
             }
             (Exec::Local, Held::There(_)) => return None,
         };
-        let text = text.trim();
-        (!text.is_empty()).then(|| text.to_owned())
+        (!text.is_empty()).then_some(text)
     }
 
     /// A command on the probed host, with the usual per-user install
@@ -654,6 +678,13 @@ impl<'a> Probe<'a> {
     pub fn env_text(&mut self, name: &str) -> Option<String> {
         let value = self.env(name)?;
         self.reveal(&value)
+    }
+
+    /// A host environment variable naming a path, kept byte for byte: a
+    /// directory may end in a space, and trimming would name another one.
+    pub fn env_path(&mut self, name: &str) -> Option<String> {
+        let value = self.env(name)?;
+        self.reveal_exact(&value)
     }
 
     pub fn http(&mut self, request: Request) -> Result<Response> {

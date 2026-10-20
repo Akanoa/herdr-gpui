@@ -102,8 +102,17 @@ fn status_column(child: impl IntoElement, cx: &RowContext<'_>) -> Div {
         .child(child)
 }
 
+/// A card being removed fades to this while its worktree goes.
+const REMOVING_OPACITY: f32 = 0.5;
+
 impl RowLayout for Orca {
     fn workspace(&self, row: WorkspaceRow<'_>, state: RowState, cx: &RowContext<'_>) -> Div {
+        // Its marks fade with it, though the moving ones draw outside it.
+        let faded = row.removing.then(|| RowContext {
+            indicators: cx.indicators.faded(REMOVING_OPACITY),
+            ..*cx
+        });
+        let cx = faded.as_ref().unwrap_or(cx);
         let (branch, status, upstream) = (row.branch(), row.status(), row.upstream());
         let WorkspaceRow {
             label,
@@ -186,7 +195,7 @@ impl RowLayout for Orca {
             return card(label, state, indent, 8., (theme, cx.mark))
                 .items_start()
                 .py(px(5.))
-                .when(removing, |card| card.opacity(0.5))
+                .when(removing, |card| card.opacity(REMOVING_OPACITY))
                 .children(mark)
                 .child(text.into_div().items_start());
         }
@@ -239,7 +248,7 @@ impl RowLayout for Orca {
         card(label, state, indent, 8., (theme, cx.mark))
             .items_start()
             .py(px(if meta { 5. } else { 7. }))
-            .when(removing, |card| card.opacity(0.5))
+            .when(removing, |card| card.opacity(REMOVING_OPACITY))
             .child({
                 let column = status_column(parts::status(status, removing, cx), cx);
                 if cx.indicators.centered() {
@@ -298,14 +307,26 @@ impl RowLayout for Orca {
                 .child(icon)
                 .child(column);
         }
-        // The agent leads, then where it runs, all on one line.
+        // The agent leads, then its pane, then where it runs, all on one line.
         let text = Line::new(inner(cx, 0.) - icon - GAP, GAP)
-            .fill(
+            .lead(
                 div()
                     .debug_selector(|| format!("name-{key}"))
                     .text_color(rgb(color)),
                 agent.name,
+                glyph_at(font, font.size),
+                0.4,
             )
+            .when_some(agent.pane, |line, pane| {
+                line.label(
+                    div()
+                        .debug_selector(|| format!("pane-{key}"))
+                        .text_color(rgb(theme.muted)),
+                    pane,
+                    glyph_at(font, font.size),
+                    0.5,
+                )
+            })
             .when_some(parts::agent_place(agent.place, cx.host), |line, place| {
                 line.label(
                     div().text_color(rgb(theme.muted)),
@@ -315,13 +336,13 @@ impl RowLayout for Orca {
                 )
             })
             .when_some(agent.status_text.as_deref(), |line, text| {
-                line.label(
+                line.keep(
                     div()
                         .debug_selector(|| format!("status-{key}"))
                         .text_color(rgb(cx.indicators.color(agent.status))),
                     text,
                     glyph_at(font, font.size),
-                    0.5,
+                    0.3,
                 )
             });
         card(key, state, 0., 4., (theme, cx.mark))

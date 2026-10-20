@@ -124,7 +124,7 @@ fn token_line(row: &[ResolvedToken], look: TokenLook, width: f32, cx: &RowContex
                     status_mark(
                         status,
                         font,
-                        cx.indicators,
+                        cx.status_indicators(),
                         color,
                         weight == FontWeight::BOLD,
                     )
@@ -196,7 +196,7 @@ pub(in crate::sidebar) fn configured_status(
     cx: &RowContext<'_>,
 ) -> Div {
     let (color, bold) = configured_status_style(token, status, cx);
-    status_mark(status, cx.font, cx.indicators, color, bold)
+    status_mark(status, cx.font, cx.status_indicators(), color, bold)
 }
 
 /// A line's tokens, less the leading `state_icon` the status slot draws.
@@ -240,7 +240,7 @@ pub(super) fn configured_lines(
     key: &str,
     lines: &[Vec<ResolvedToken>],
     look: TokenLook,
-    label_width: f32,
+    (label_width, detail_limit): (f32, f32),
     mut workspace_icon: RowIcon,
     cx: &RowContext<'_>,
 ) -> Div {
@@ -260,6 +260,13 @@ pub(super) fn configured_lines(
         ICON_RESERVE
     };
     for (index, line) in lines.iter().enumerate() {
+        // The second line sits beside the badge's counts, so it may have
+        // less room than the first.
+        let label_width = if index == 1 {
+            detail_limit
+        } else {
+            label_width
+        };
         let agent_here = agent_at == Some(index);
         let reserve = if index == 0 { workspace_reserve } else { 0. }
             + if agent_here { agent_reserve } else { 0. };
@@ -274,7 +281,7 @@ pub(super) fn configured_lines(
         if agent_here && let Some(icon) = agent_icon {
             text = text.child(agent_mark(key, icon, agent_size, icon_color, font));
         }
-        if index == 0 && !matches!(workspace_icon, RowIcon::None) {
+        if index == 0 && matches!(workspace_icon, RowIcon::Mark | RowIcon::Avatar(_)) {
             text = text.child(std::mem::replace(&mut workspace_icon, RowIcon::None).slot(
                 key,
                 font,
@@ -310,7 +317,13 @@ mod tests {
         };
         let theme = Theme::default();
         let cx = RowContext {
-            indicators: Indicators::new(None, None, false, &theme),
+            indicators: Indicators::new(
+                None,
+                crate::config::StatusIcons::default(),
+                false,
+                false,
+                &theme,
+            ),
             font: &font,
             theme: &theme,
             look: layout::for_mode(LayoutMode::default()),

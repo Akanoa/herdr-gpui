@@ -222,6 +222,35 @@ pub(crate) fn mutation(
     Ok(result)
 }
 
+/// A REST read of `path` under `https://api.github.com`, such as
+/// `/repos/OWNER/REPO/security-advisories`, through the same bounded reader
+/// and typed refusals as GraphQL. Callers build `path` from names they have
+/// validated; nothing here escapes it. The answer is read straight into
+/// `T`, so fields `T` leaves out are skipped rather than held.
+pub(crate) fn rest<T: DeserializeOwned>(
+    context: &'static str,
+    token: &SecretString,
+    path: &str,
+    timeout: Duration,
+    cancelled: impl Fn() -> bool,
+) -> Result<T> {
+    if cancelled() {
+        return Err(Error::PrCancelled);
+    }
+    let reply = agent(timeout)
+        .get(format!("https://api.github.com{path}"))
+        .header("User-Agent", "Herdr-GPUI")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("Authorization", authorization(token)?)
+        .call()
+        .map_err(log::network(context))?;
+    if cancelled() {
+        return Err(Error::PrCancelled);
+    }
+    response(context, reply)
+}
+
 /// The `owner/repo` a request names, so a refusal can say which repository
 /// GitHub would not show. Every repository query here uses these variables.
 fn requested_repository(variables: &Value) -> Option<String> {
@@ -236,7 +265,7 @@ fn requested_repository(variables: &Value) -> Option<String> {
 /// Enterprise Managed User, which an additional account can read instead.
 pub(crate) fn hidden_hint(app_token: bool) -> &'static str {
     if app_token {
-        "This GitHub App sign-in only reaches repositories the App is installed on: install it for the repository's owner, or add the account that owns it on the GitHub page."
+        "This GitHub App sign-in only reaches repositories the App is installed on: install it for the repository's owner and approve the permissions it asks for, or add the account that owns it on the GitHub page."
     } else {
         "Check the remote, the token's repository access, and SSO authorization, or add the account that owns it on the GitHub page."
     }
@@ -272,6 +301,36 @@ pub(super) fn query_error(
     rejection(errors).map_or(Error::GitHubQuery, Error::GitHubRejected)
 }
 
+/// GraphQL endpoints that tests stand in for GitHub, by the token that reads
+/// them, so a test's fake never answers another test's calls.
+#[cfg(test)]
+static FAKE_GRAPHQL: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Sends GraphQL calls made with `token` to `url` instead of GitHub, for
+/// the rest of the test process.
+#[cfg(test)]
+pub(crate) fn fake_graphql(token: &str, url: String) {
+    if let Ok(mut fakes) = FAKE_GRAPHQL.lock() {
+        fakes.retain(|(fake, _)| fake != token);
+        fakes.push((token.to_owned(), url));
+    }
+}
+
+fn graphql_url(token: &SecretString) -> String {
+    #[cfg(test)]
+    if let Some((_, url)) = FAKE_GRAPHQL.lock().ok().and_then(|fakes| {
+        fakes
+            .iter()
+            .find(|(fake, _)| fake == token.expose_secret())
+            .cloned()
+    }) {
+        return url;
+    }
+    #[cfg(not(test))]
+    let _ = token;
+    "https://api.github.com/graphql".to_owned()
+}
+
 /// One GraphQL POST, its bounded JSON body, and the headers that explain a
 /// failure GraphQL reports with a 200.
 fn post(
@@ -286,7 +345,7 @@ fn post(
         .checked_duration_since(Instant::now())
         .ok_or(Error::PrTimeout)?;
     let reply = agent(timeout)
-        .post("https://api.github.com/graphql")
+        .post(graphql_url(token))
         .header("User-Agent", "Herdr-GPUI")
         .header("Accept", "application/vnd.github+json")
         .header("Content-Type", "application/json")

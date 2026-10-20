@@ -2,10 +2,7 @@
 pub use crate::updater::UpdateError;
 use daemon::daemon_error_message;
 pub use github::{GitHubAccountsError, GitHubJsonError};
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+use std::{io, path::PathBuf};
 pub use theme::ThemeParseError;
 
 #[cfg(any(target_os = "macos", windows))]
@@ -22,6 +19,9 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    #[cfg(feature = "azure")]
+    #[error(transparent)]
+    Azure(#[from] crate::azure::Error),
     #[error(transparent)]
     Backdrop(#[from] crate::backdrop::Error),
     #[cfg(feature = "boat")]
@@ -89,6 +89,10 @@ pub enum Error {
     #[cfg(feature = "cloud")]
     #[error(transparent)]
     Cloud(#[from] crate::cloud::Error),
+    /// Only CPU and memory are sampled on an Azure machine so far.
+    #[cfg(feature = "azure")]
+    #[error("This is not available for cloud machines yet.")]
+    CloudHostUnsupported,
     #[error(transparent)]
     CloudSetup(#[from] crate::cloud_setup::Error),
     #[error(transparent)]
@@ -502,6 +506,9 @@ pub enum Error {
         command: &'static str,
         keystroke: String,
     },
+    #[cfg(windows)]
+    #[error(transparent)]
+    LaunchAtLogin(#[from] crate::launch_at_login::Error),
     #[error("File not found: {}", path.display())]
     LinkedFileMissing { path: PathBuf },
     #[error("This link names a file on another computer, {host}. It is not opened from here.")]
@@ -552,6 +559,8 @@ pub enum Error {
     NotInCheckout,
     #[error("Could not read the orchestrator's database: {0}")]
     OrchestratorItems(#[source] crate::orchestrator::Error),
+    #[error(transparent)]
+    Overview(#[from] crate::overview::Error),
     #[cfg(target_os = "macos")]
     #[error("The window has no view to place a page beneath")]
     PageStack,
@@ -924,8 +933,6 @@ pub enum Error {
     UsageTimeout,
     #[error("Could not reach this host over SSH to read usage.")]
     UsageUnreachable,
-    #[error("Remote usage needs SSH, which this platform's client does not support.")]
-    UsageUnsupported,
     #[cfg(any(target_os = "macos", windows))]
     #[error("Could not create the page: {0}")]
     WebView(#[from] wry::Error),
@@ -968,25 +975,21 @@ pub enum Error {
     WorktreeScriptsUnsupportedHost,
     #[error("Select a checkout from the daemon's worktree list.")]
     WorktreeSelection,
-    /// Probes that open a shell on the host (usage, ports, checkpoints) have
-    /// no route into a WSL distribution yet; CPU and memory do.
-    #[error("This is not available for WSL distributions yet.")]
+    /// A shell into a WSL distribution starts through `wsl.exe`, which only a
+    /// Windows client has.
+    #[error("WSL distributions can only be reached from Windows.")]
     WslHostUnsupported,
+    #[error("Another drop's paths are still being mapped in WSL. Try again in a moment.")]
+    WslPasteBusy,
+    #[error("The pane the files were dropped on changed before their paths were ready.")]
+    WslPasteTargetGone,
     // keep-sorted end
-}
-
-impl Error {
-    pub(crate) fn at_path(self, path: &Path) -> Self {
-        Self::Path {
-            path: path.to_owned(),
-            source: Box::new(self),
-        }
-    }
 }
 
 mod config;
 mod daemon;
 mod github;
+mod path;
 mod theme;
 
 #[cfg(test)]

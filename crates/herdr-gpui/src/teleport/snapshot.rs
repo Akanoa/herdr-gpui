@@ -81,6 +81,14 @@ pub(crate) struct Pane {
     pub(crate) foreground_cwd: Option<String>,
     pub(crate) agent: Option<String>,
     pub(crate) agent_session: Option<AgentSession>,
+    /// The daemon reports the pane's agent as working. Statuses this client
+    /// does not know read as not working, so a new one cannot break parsing.
+    #[serde(default, rename = "agent_status", deserialize_with = "is_working")]
+    pub(crate) working: bool,
+}
+
+fn is_working<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.as_deref() == Some("working"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

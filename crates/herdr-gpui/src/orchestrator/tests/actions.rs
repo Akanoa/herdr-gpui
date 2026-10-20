@@ -2,51 +2,63 @@ use super::*;
 use crate::orchestrator::actions::{Action, DispatchRequest, Site, perform};
 use crate::teleport::{AgentKind, Host};
 use herdr_client::ConnectTarget;
-use std::{os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicBool};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{OnceLock, atomic::AtomicBool},
+};
 
 mod agent_name;
 mod parent;
 mod remove;
 mod startup;
 
-/// A home whose `herdr` logs each call and answers as Herdr would. A call
-/// whose arguments contain `$FAIL` exits 1. Its snapshot is `$HOME/snapshot`
-/// when written, else one where `w1` is the repository's parent workspace
-/// and `w9` the linked worktree a dispatch creates.
+/// `tests/support/fake_herdr.rs`, compiled once per test process: a program
+/// rather than a script, so the dispatch tests run on every client platform.
+fn fake_herdr() -> &'static Path {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let dir =
+            std::env::temp_dir().join(format!("herdr-gpui-fake-herdr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join(format!("herdr{}", std::env::consts::EXE_SUFFIX));
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/fake_herdr.rs");
+        // `rustc` writes the program, so this process never holds it open for
+        // writing while a sibling test forks (Linux would refuse to run it).
+        let status = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .args(["--edition", "2021", "-o"])
+            .arg(&program)
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(status.success(), "compiling {}", source.display());
+        program
+    })
+}
+
+/// A home whose `herdr` (see `tests/support/fake_herdr.rs`) logs each call
+/// and answers as Herdr would. A call whose arguments contain `fail` exits 1.
+/// Its snapshot is `$HOME/snapshot` when written, else one where `w1` is the
+/// repository's parent workspace and `w9` the linked worktree a dispatch
+/// creates.
 fn fake_home(dir: &Path, fail: &str) -> Host {
-    let bin = dir.join("home/.local/bin");
+    let home = dir.join("home");
+    let bin = home.join(".local/bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let snapshot = snapshot(&[("w1", false), ("w9", true)]);
-    let script = format!(
-        r#"#!/bin/sh
-printf '%s\n' "$*" >> "$HOME/calls"
-if [ -n "{fail}" ]; then case "$*" in *"{fail}"*) exit 1 ;; esac; fi
-case "$1 $2" in
-  "api snapshot")
-    if [ -f "$HOME/snapshot" ]; then cat "$HOME/snapshot"; else printf '%s' '{snapshot}'; fi ;;
-  "workspace create") printf '%s' '{{"result":{{"workspace":{{"workspace_id":"w0"}}}}}}' ;;
-  "worktree create") printf '%s' '{{"result":{{"workspace":{{"workspace_id":"w9"}},"tab":{{"tab_id":"t9"}},"root_pane":{{"pane_id":"p9","terminal_id":"term9"}},"worktree":{{"path":"/tmp/wt/377-icons"}}}}}}' ;;
-  "pane get")
-    if [ -f "$HOME/pane" ]; then cat "$HOME/pane"; else printf '%s' '{{"result":{{"pane":{{"pane_id":"p9","terminal_id":"term9"}}}}}}'; fi ;;
-  "agent start")
-    if [ -f "$HOME/busy" ]; then
-      read -r busy < "$HOME/busy"
-      if [ "$busy" -gt 0 ]; then
-        printf '%s\n' "$((busy - 1))" > "$HOME/busy"
-        printf '%s' '{{"id":"cli:agent:start","error":{{"code":"agent_pane_busy","message":"not an available shell"}}}}' >&2
-        exit 1
-      fi
-    fi ;;
-esac
-"#
-    );
-    std::fs::write(bin.join("herdr"), script).unwrap();
-    std::fs::set_permissions(bin.join("herdr"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        home.join("snapshot-default"),
+        snapshot(&[("w1", false), ("w9", true)]),
+    )
+    .unwrap();
+    std::fs::write(home.join("fail"), fail).unwrap();
+    // A link, not a copy, for the same reason `rustc` writes the program.
+    std::fs::hard_link(
+        fake_herdr(),
+        bin.join(format!("herdr{}", std::env::consts::EXE_SUFFIX)),
+    )
+    .unwrap();
     let mut host = Host::new(&ConnectTarget::Local).unwrap();
-    host.env = vec![(
-        "HOME".into(),
-        dir.join("home").to_string_lossy().into_owned(),
-    )];
+    host.env = vec![("HOME".into(), home.to_string_lossy().into_owned())];
     host
 }
 

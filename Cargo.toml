@@ -1,5 +1,5 @@
 [workspace]
-members  = ["crates/herdr-client", "crates/herdr-gpui", "crates/herdr-gpui-launcher", "crates/herdr-protocol"]
+members  = ["crates/embed-resource", "crates/herdr-client", "crates/herdr-gpui", "crates/herdr-gpui-launcher", "crates/herdr-protocol"]
 resolver = "2"
 
 [workspace.package]
@@ -49,6 +49,9 @@ futures-lite         = "2"
 getrandom            = "0.4.3"
 gpui                 = { package = "gpui-pre", version = "=0.3.6" }
 gpui_platform        = { package = "gpui-pre-platform", version = "=0.3.6" }
+# Reads local repositories for the orchestrator without starting `git`:
+# discovery, config with its includes and URL rewrites, refs, and rev-parse.
+gix                  = { default-features = false, features = ["sha1"], version = "0.89" }
 # The web views behind browser tabs; `browser::page` lays them out in the window.
 wry                  = { package = "lb-wry", version = "=0.53.3" }
 herdr-client         = { path = "crates/herdr-client" }
@@ -81,6 +84,9 @@ objc2-web-kit        = { default-features = false, features = ["WKSnapshotConfig
 # Asks for Dock badge permission; the version GPUI's macOS platform already links.
 objc2-user-notifications ={ default-features = false, features = ["UNUserNotificationCenter", "block2", "std"], version = "0.3.2" }
 raw-window-handle    = "0.6"
+# TLS for the Azure sandbox exec stream, with the ring provider and roots
+# ureq already links.
+rustls               = { default-features = false, features = ["ring", "std", "tls12"], version = "0.23" }
 rusqlite             = { features = ["bundled"], version = "0.40" }
 rodio                = { default-features = false, features = ["playback", "symphonia-mp3", "tracing"], version = "0.22.2" }
 rustix               = { features = ["event", "fs", "process", "pty", "termios"], version = "=1.1.5" }
@@ -105,17 +111,30 @@ thiserror            = "2"
 toml                 = "1.1"
 toml_edit            = "0.25"
 tracing              = "0.1"
+# The Azure sandbox exec stream; TLS comes from `rustls` above.
+tungstenite          = { default-features = false, features = ["handshake"], version = "0.30" }
 tracing-subscriber   = { default-features = false, features = ["registry", "std"], version = "0.3" }
+unicode-normalization = "0.1.26"
 unicode-properties   = { version = "0.1.4", default-features = false, features = ["emoji"] }
 unicode-segmentation = "1"
 unicode-width        = "0.2.2"
 ureq                 = "3"
+webpki-roots         = "1"
 uuid                 = { features = ["serde", "v4", "v5"], version = "1" }
 # Window shell properties behind the taskbar relaunch identity; the version
 # GPUI's Windows platform already links.
 windows              = { features = ["Win32_Foundation", "Win32_Storage_EnhancedStorage", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"], version = "0.62.2" }
+windows-registry     = "0.100.0"
+# The error type `windows-registry` returns; its own version, not `windows`'s.
+windows-result       = "0.100.0"
 windows-sys          = { features = ["Win32_Foundation", "Win32_System_Pipes"], version = "0.61.2" }
 # Embeds the Windows executable's icon and version information; a build
 # dependency, so it runs on the host.
 winresource          = "0.1.34"
-zeroize              = "=1.9.0"
+zeroize              = "=1.9.1"
+
+# GPUI's build script embeds its own Windows manifest through embed-resource,
+# which would clash with Herdr's (crates/herdr-gpui/windows.manifest); this
+# no-op stands in for it. See crates/embed-resource.
+[patch.crates-io]
+embed-resource = { path = "crates/embed-resource" }

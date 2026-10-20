@@ -70,7 +70,7 @@ pub(crate) fn built_in(item: &Item) -> String {
 
 /// A marker an issue's author cannot predict, so their text cannot close
 /// the fence early.
-fn nonce() -> String {
+pub(crate) fn nonce() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..12].to_owned()
 }
 

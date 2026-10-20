@@ -7,6 +7,7 @@ mod events;
 mod help;
 mod hosts;
 mod local;
+mod open;
 mod settings;
 mod tabs;
 mod work;
@@ -176,6 +177,58 @@ fn send(request: &Request) -> crate::Result<Response> {
     socket::call(&socket_path()?, request)
 }
 
+/// Hands a `herdr-gpui://` link to the running app; what it did, for a
+/// person. [`crate::Error::ControlUnavailable`] means no app is running.
+pub(crate) fn send_link(link: &crate::link::Link) -> crate::Result<String> {
+    hand_off(&Request::Link(Call {
+        caller: Caller::default(),
+        op: super::protocol::LinkOp { url: link.to_url() },
+    }))
+}
+
+/// Brings the running app's window forward, for a plain launch while it
+/// runs; what it did, for a person. [`crate::Error::ControlUnavailable`]
+/// means no app is running.
+#[cfg(windows)]
+pub(crate) fn send_focus() -> crate::Result<String> {
+    hand_off(&focus_request())
+}
+
+/// `app focus` for no workspace in particular: the frontmost window.
+#[cfg(any(windows, test))]
+fn focus_request() -> Request {
+    Request::App(Call {
+        caller: Caller::default(),
+        op: super::protocol::app::AppOp::Focus,
+    })
+}
+
+/// Sends what a launch hands to the running app instead of starting it.
+fn hand_off(request: &Request) -> crate::Result<String> {
+    // The shell lets the process it started for a click take the
+    // foreground; this passes that on to the app, so its window comes
+    // forward instead of flashing in the taskbar.
+    #[cfg(windows)]
+    allow_foreground();
+    match send(request)? {
+        Response::Done { message } => Ok(message),
+        response => Err(rejected(response)),
+    }
+}
+
+// One documented call with no pointers; windows-sys and `windows` have no
+// safe wrapper for it.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn allow_foreground() {
+    use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
+    // SAFETY: takes a process ID and returns whether it applied. It does
+    // nothing for a process without the foreground right to pass on.
+    if let Err(error) = unsafe { AllowSetForegroundWindow(ASFW_ANY) } {
+        tracing::debug!(%error, "foreground not passed to the app");
+    }
+}
+
 fn rejected(response: Response) -> crate::Error {
     match response {
         Response::Error { code, message } => crate::Error::ControlRejected { code, message },
@@ -343,6 +396,7 @@ pub(crate) fn run(invocation: Invocation) -> ExitCode {
         ControlCommand::Browser(command) => browser::run(command, &context),
         ControlCommand::Status => app::status(&context),
         ControlCommand::App(command) => app::app(command, &context),
+        ControlCommand::Open { path } => open::open(&path, &context),
         ControlCommand::Window(command) => app::window(command, &context),
         ControlCommand::Ui(command) => app::ui(command, &context),
         ControlCommand::Run { name } => app::run_command(&name, &context),
@@ -367,6 +421,7 @@ pub(crate) fn run(invocation: Invocation) -> ExitCode {
         ControlCommand::Processes { pane } => local::processes(pane.as_deref()),
         ControlCommand::Usage => hosts::usage(&context),
         ControlCommand::System => hosts::system(&context),
+        ControlCommand::Security(command) => hosts::security(command, &context),
         ControlCommand::Search {
             files,
             query,

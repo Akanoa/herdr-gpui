@@ -5,7 +5,10 @@
 use super::{Error, Provider, Repository, Result, SourceKey, error::script};
 use crate::teleport::Host;
 use herdr_client::{ConnectTarget, shell_quote};
-use std::sync::atomic::AtomicBool;
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
+};
 
 /// What one checkout's repository offers.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +48,9 @@ pub(crate) fn detect(
     checkout: &str,
     cancelled: &AtomicBool,
 ) -> Result<RepoInfo> {
+    if host.is_local() {
+        return detect_local(target, checkout);
+    }
     let body = format!(
         r#"cd -- {checkout} 2>/dev/null || exit 0
 root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
@@ -70,6 +76,23 @@ done
     parse(target, &output)
 }
 
+/// The GitHub.com repository, as `owner/name`, whose issues the orchestrator
+/// would list for `checkout` on `target`, or `None` for another provider.
+/// Blocks on Git or SSH: call it off the UI thread.
+pub(crate) fn github_repository(
+    target: &ConnectTarget,
+    checkout: &str,
+    cancelled: &AtomicBool,
+) -> Result<Option<String>> {
+    let host = Host::new(target).map_err(|_| Error::UnsupportedHost)?;
+    let info = detect(target, &host, checkout, cancelled)?;
+    Ok(info
+        .remote
+        .map(|remote| remote.source)
+        .filter(|source| source.provider == Provider::Github && source.host == "github.com")
+        .map(|source| source.repository))
+}
+
 pub(super) fn parse(target: &ConnectTarget, output: &str) -> Result<RepoInfo> {
     let mut common = None;
     let mut main = None;
@@ -88,6 +111,52 @@ pub(super) fn parse(target: &ConnectTarget, output: &str) -> Result<RepoInfo> {
     let (Some(common), Some(main_root)) = (common, main) else {
         return Err(Error::NotARepository);
     };
+    Ok(assemble(target, common, main_root, beads, &remotes))
+}
+
+/// What [`detect`]'s script reads, read with gix: this machine starts no
+/// shell or `git`, so every client platform reads its own checkouts.
+fn detect_local(target: &ConnectTarget, checkout: &str) -> Result<RepoInfo> {
+    let Some(found) = super::git::checkout(Path::new(checkout))? else {
+        return Err(Error::NotARepository);
+    };
+    let main = found.main.to_string_lossy().into_owned();
+    let beads = found.main.join(".beads").is_dir();
+    let remotes: Vec<_> = found
+        .remotes
+        .iter()
+        .map(|(name, url)| (name.as_str(), url.as_str()))
+        .collect();
+    Ok(assemble(
+        target,
+        found.common.to_string_lossy().into_owned(),
+        main,
+        beads,
+        &remotes,
+    ))
+}
+
+/// `path` without Windows' `\\?\` prefix, which `canonicalize` adds and Git
+/// and the user never write.
+pub(super) fn plain(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(rest) = path.to_str().and_then(|text| text.strip_prefix(r"\\?\"))
+        && !rest.starts_with(r"UNC\")
+    {
+        return PathBuf::from(rest);
+    }
+    path
+}
+
+/// A repository's info from its git common directory, main checkout, Beads,
+/// and `(name, url)` remotes.
+fn assemble(
+    target: &ConnectTarget,
+    common: String,
+    main_root: String,
+    beads: bool,
+    remotes: &[(&str, &str)],
+) -> RepoInfo {
     let repository = match target {
         ConnectTarget::Ssh { target, .. } => Repository::Ssh {
             destination: target.clone(),
@@ -107,12 +176,12 @@ pub(super) fn parse(target: &ConnectTarget, output: &str) -> Result<RepoInfo> {
             source: parse_remote_url(url).ok()?,
         })
     });
-    Ok(RepoInfo {
+    RepoInfo {
         repository,
         main_root,
         beads,
         remote,
-    })
+    }
 }
 
 /// A remote URL's host and repository path, as agent-launcher reads them, so

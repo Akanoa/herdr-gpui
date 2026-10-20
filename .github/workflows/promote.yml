@@ -64,7 +64,20 @@ jobs:
     outputs:
       sha: ${{ steps.validate.outputs.sha }}
       version: ${{ steps.validate.outputs.version }}
+      windows_signed: ${{ steps.windows-signing.outputs.signed }}
     steps:
+      # As in release.yml: winget only gets signed installers, and signing is
+      # on once WINDOWS_SIGNING_SUBJECT is set. A beta published before that
+      # and promoted after would still be submitted, unsigned.
+      - id: windows-signing
+        env:
+          WINDOWS_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
+        run: |
+          if [[ -n "$WINDOWS_SIGNING_SUBJECT" ]]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
       - id: validate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -162,12 +175,14 @@ jobs:
         run: bash scripts/release/update-homebrew.sh "$VERSION" rendered-cask.rb
 
   # Keep these steps identical in release.yml and promote.yml. Betas never
-  # reach winget: promote.yml submits one when it is promoted.
+  # reach winget: promote.yml submits one when it is promoted. Neither do
+  # unsigned releases.
   winget:
     needs: [validate, promote]
     if: >-
       github.repository == 'penso/herdr-gpui' && github.ref == 'refs/heads/main' &&
-      github.actor == 'penso' && github.triggering_actor == 'penso'
+      github.actor == 'penso' && github.triggering_actor == 'penso' &&
+      needs.validate.outputs.windows_signed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: winget

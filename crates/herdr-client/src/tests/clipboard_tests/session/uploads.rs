@@ -43,7 +43,7 @@ fn sustained_inbound_progress_survives_a_backpressured_outgoing_image() {
 
 #[test]
 fn expired_preparation_skips_retained_permit_but_not_published_data() {
-    use crate::clipboard::{ImageLease, ImageSlot};
+    use crate::clipboard::{ImageLease, ImageSlot, WakeOnDrop};
     use crate::handle::Command;
     use std::sync::atomic::Ordering;
 
@@ -56,12 +56,14 @@ fn expired_preparation_skips_retained_permit_but_not_published_data() {
             cancelled: Arc::new(AtomicBool::new(false)),
             finished: Arc::new(AtomicBool::new(false)),
             reserved_at: Instant::now() - COMMAND_TIMEOUT,
+            waker: client.handle.inner.commands.waker(),
         });
         assert!(!lease.busy.swap(true, Ordering::AcqRel));
         let (sender, receiver) = bounded(1);
         let upload = ClipboardImageUpload {
             target: ClientClipboardImageTarget::Pane("w1:p1".into()),
             sender,
+            _wake: WakeOnDrop(lease.waker.clone()),
             lease: lease.clone(),
             stop: client.handle.inner.stop.clone(),
         };
@@ -82,6 +84,8 @@ fn expired_preparation_skips_retained_permit_but_not_published_data() {
             .try_send(Command {
                 boot_id: "boot-v1".into(),
                 bytes: Vec::new(),
+                input_pane: None,
+                written: Default::default(),
                 request: None,
                 image: Some(ImageSlot {
                     receiver,

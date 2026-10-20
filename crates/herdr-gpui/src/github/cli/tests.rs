@@ -74,14 +74,14 @@ mod process {
     fn fake(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gh");
-        std::fs::write(
+        crate::test_executable::write(
             &path,
             format!(
                 "#!/bin/sh\n[ \"$*\" = 'auth token --hostname github.com' ] || exit 3\n{body}\n"
             ),
+            0o700,
         )
         .unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         (dir, path)
     }
 

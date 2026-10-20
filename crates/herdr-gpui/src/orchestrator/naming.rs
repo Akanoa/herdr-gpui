@@ -8,7 +8,7 @@
 use super::{Backend, Item, Owner, Run, RunState, model::Workspace};
 use crate::{orchestrator::view::LiveAgent, teleport::Host};
 use chrono::{DateTime, Utc};
-use herdr_client::{protocol::AgentStatus, shell_quote};
+use herdr_client::protocol::AgentStatus;
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 
 /// The prefix every branch named here has.
@@ -205,11 +205,31 @@ pub(crate) fn local_branches(
     main_root: &str,
     cancelled: &AtomicBool,
 ) -> Option<Vec<String>> {
-    let body = format!(
-        "git -C {} for-each-ref --count={MAX_BRANCHES} --format='%(refname:short)' refs/heads/{PREFIX}\n",
-        shell_quote(main_root),
-    );
-    let output = host.capture(&body, cancelled).ok()?;
+    if host.is_local() {
+        let branches = super::git::branches(std::path::Path::new(main_root), PREFIX, MAX_BRANCHES);
+        return Some(
+            branches
+                .ok()?
+                .into_iter()
+                .filter(|branch| branch_hash(branch).is_some())
+                .collect(),
+        );
+    }
+    let output = host
+        .exec(
+            "git",
+            &[
+                "-C",
+                main_root,
+                "for-each-ref",
+                &format!("--count={MAX_BRANCHES}"),
+                "--format=%(refname:short)",
+                &format!("refs/heads/{PREFIX}"),
+            ],
+            Host::QUERY_IDLE,
+            cancelled,
+        )
+        .ok()?;
     Some(
         String::from_utf8_lossy(&output)
             .lines()

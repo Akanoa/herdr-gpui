@@ -103,9 +103,10 @@ fn wsl_exe() -> Command {
 
 /// `script` under the distribution's `/bin/sh` in the default user's home.
 /// `--exec` hands the arguments to the program untouched; without it `wsl.exe`
-/// expands `$VARIABLES` in them first, which would rewrite the script.
+/// expands `$VARIABLES` in them first, which would rewrite the script. The
+/// caller has validated `distro`.
 #[cfg(windows)]
-fn command(distro: &str, script: &str) -> Command {
+pub(crate) fn command(distro: &str, script: &str) -> Command {
     let mut command = wsl_exe();
     command.args([
         "--distribution",
@@ -275,9 +276,11 @@ fn wsl_error(error: Error) -> Error {
 }
 
 mod catalog;
+mod paths;
 pub use catalog::{
     WslHost, WslHosts, add_wsl_host, load_wsl_hosts, remove_wsl_host, store_wsl_selection,
 };
+pub use paths::wsl_paths;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

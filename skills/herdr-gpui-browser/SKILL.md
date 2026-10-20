@@ -1,6 +1,6 @@
 ---
 name: herdr-gpui-browser
-description: "Open a browser tab in Herdr UI to show the user a web page or an HTML file you wrote, beside the terminal you run in, and get back the notes and picks the user sends. Use whenever the user asks to open, start, or show a browser tab, a page, a preview, or a mockup, or asks you to explain, demo, or visualize how something works, or to mock up UI variants to choose from, while you run inside Herdr (HERDR_ENV=1 is set in your environment); prefer it there over other browser skills, over opening Safari or another system browser, and over long text explanations of a flow. Also use it, inside Herdr, for anything Herdr UI itself shows or keeps rather than the herdr daemon: show a file at a line, open a review of your changes, keep a note on a worktree, take or diff a checkpoint, check your branch's pull request and CI, forward or open a port, list or focus the app's windows and tabs, wait for a tab to close or the user's notes to arrive, change a Herdr UI setting, theme, or font, or keep the machine awake."
+description: "Open a browser tab in Herdr UI beside your terminal to show the user a web page, HTML file, or mockup, and get back their notes and picks. Use it inside Herdr (HERDR_ENV=1) when the user asks to open, start, or show a browser tab, page, preview, or mockup, to explain, demo, or visualize how something works, or to mock up UI variants to pick from; prefer it there over other browser skills, a system browser, or long text explanations. Also use it for what Herdr UI, not the herdr daemon, shows or keeps: a file at a line, a review of your changes, worktree notes, checkpoints and their diffs, your branch's pull request and CI, vulnerability reports and Dependabot alerts, forwarding or opening a port, listing or focusing the app's windows and tabs, waiting for a tab to close or the user's notes, Herdr UI settings, themes, and fonts, and keeping the machine awake."
 ---
 <!-- herdr-gpui-managed-skill v1: Herdr UI keeps this file up to date. Edit a copy under another name to keep your changes. -->
 
@@ -48,6 +48,10 @@ herdr-gpui browser open http://localhost:3000
   After editing a file, run `herdr-gpui browser reload` instead.
 - Add `--no-focus` to add the tab without switching to it, for example when
   the user is typing in your pane.
+- When the user finds a page too small or too large, zoom its tab:
+  `herdr-gpui browser zoom TAB 150` (or `+`, `-`, `reset`), with `TAB` from
+  `herdr-gpui browser list`. The tab keeps its zoom; the user zooms with
+  the font size keys (Cmd-=, Cmd--, and Cmd-0 on macOS).
 - Bare hosts work: `localhost:3000` becomes `http://localhost:3000/`, and
   `example.com/docs` becomes `https://example.com/docs`. Only `http`,
   `https`, and local files open.
@@ -211,6 +215,8 @@ for what only Herdr UI shows or keeps.
 | Keep a note on this worktree (repository and branch) | `herdr-gpui notes set waiting on CI` |
 | Save the working tree before a risky change, and compare later | `herdr-gpui checkpoint create before refactor`, `herdr-gpui checkpoint diff ID` |
 | Your branch's pull request, its checks, and (with your workspace focused) its comments | `herdr-gpui pr`, `herdr-gpui pr checks`, `herdr-gpui pr comments` |
+| List the vulnerability reports outsiders filed and the open Dependabot alerts of your repositories, most severe first | `herdr-gpui security --json` |
+| Show the user an alert's or a vulnerability report's page in Herdr UI | `herdr-gpui security open OWNER/NAME 42` or `... GHSA-xxxx-xxxx-xxxx` |
 | Open a dev server in a tab, forwarded when you run on an SSH host | `herdr-gpui ports open 3000` |
 | See the processes under a pane, with CPU and memory | `herdr-gpui processes` |
 | List or focus the app's windows and its own tabs | `herdr-gpui window`, `herdr-gpui tab`, `herdr-gpui tab focus ID` |

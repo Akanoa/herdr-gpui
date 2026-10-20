@@ -12,6 +12,8 @@ mod annotate;
 // Linux builds show no pages, so there is nothing to annotate there.
 #[cfg(any(target_os = "macos", windows))]
 mod annotate_view;
+#[cfg(windows)]
+mod building;
 mod closed;
 mod code;
 mod code_group;
@@ -48,12 +50,14 @@ mod snapshot;
 mod stacking;
 mod store;
 mod tab_appear;
+mod tab_move;
 mod tab_scroll;
 #[cfg(target_os = "macos")]
 mod underlay;
 mod view;
 #[cfg(test)]
 mod view_tests;
+mod zoom;
 
 #[cfg(any(target_os = "macos", windows))]
 pub(crate) use annotate_view::Annotations;
@@ -83,6 +87,7 @@ pub(crate) use underlay::{
     AroundPages, ground as ground_around_pages, picture as picture_around_pages,
 };
 pub(crate) use view::{Browser, PageOpened, scope};
+pub(crate) use zoom::Zoom;
 
 /// Whether this build can show a page inside the window. Elsewhere a browser
 /// tab request opens the system browser instead.

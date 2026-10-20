@@ -42,7 +42,7 @@ fn agent_rows_name_their_place_then_their_agent() {
         host: Option<&'a str>,
     ) -> (Vec<(&'a str, bool)>, &'a str) {
         let agent = &snapshot.agents[0];
-        agent_labels(agent_name(agent), agent_place(agent, snapshot), host)
+        agent_labels(agent_name(agent), agent_place(agent, snapshot), host, None)
     }
     assert_eq!(
         labels(&snapshot, None),
@@ -157,7 +157,7 @@ fn cells_hand_their_state_and_data_to_the_layout() {
     let snapshot = layout_tests::snapshot(1);
     let (font, theme) = (crate::config::Config::default().sidebar, Theme::default());
     let cx = RowContext {
-        indicators: Indicators::new(None, None, false, &theme),
+        indicators: Indicators::new(None, StatusIcons::default(), false, false, &theme),
         font: &font,
         theme: &theme,
         look: for_mode(Default::default()),
@@ -191,6 +191,7 @@ fn cells_hand_their_state_and_data_to_the_layout() {
             icon: crate::icons::AgentIcon::Generic,
             status: AgentStatus::Working,
             place: None,
+            pane: None,
             status_text: None,
             lines: vec![],
         }),

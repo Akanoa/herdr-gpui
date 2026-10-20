@@ -638,10 +638,12 @@ fn relay_line(app: &std::path::Path, socket: &std::path::Path) -> Result<String>
     ))
 }
 
+/// Windows has no relay for a terminal setup yet; the dialog asks the user to
+/// run `herdr machine add` in a terminal instead and never calls this.
 #[cfg(windows)]
 pub(super) fn terminal_setup(_: &Request, _: bool) -> Result<TerminalSetup> {
     Err(Error::DeviceSetupInput(
-        "Saved SSH devices are unavailable on Windows.",
+        "Setting up a device in a terminal is unavailable on Windows.",
     ))
 }
 

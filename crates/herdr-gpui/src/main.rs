@@ -4,20 +4,24 @@
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 
 mod about;
+mod accessibility;
 mod actions;
 mod agent_notes;
 mod agent_skill;
 mod app;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", windows, test))]
 mod app_badge;
 mod app_icon;
 mod avatars;
+#[cfg(feature = "azure")]
+mod azure;
 mod backdrop;
 mod bell;
 #[cfg(feature = "boat")]
 mod boat;
 mod browser;
 mod caffeine;
+mod caption;
 mod checkpoint;
 mod cli;
 mod close_modal;
@@ -25,6 +29,7 @@ mod close_modal;
 #[cfg(all(
     feature = "cloud",
     not(any(
+        feature = "azure",
         feature = "boat",
         feature = "coder",
         feature = "daytona",
@@ -32,7 +37,7 @@ mod close_modal;
     ))
 ))]
 compile_error!(
-    "the `cloud` feature is enabled through a provider feature, such as `boat`, `coder`, `daytona`, or `railway`"
+    "the `cloud` feature is enabled through a provider feature, such as `azure`, `boat`, `coder`, `daytona`, or `railway`"
 );
 #[cfg(feature = "cloud")]
 mod cloud;
@@ -51,6 +56,7 @@ mod contrast;
 mod control;
 mod controls;
 mod copy_mode;
+mod crash;
 mod daemon;
 #[cfg(feature = "daytona")]
 mod daytona;
@@ -74,13 +80,19 @@ mod icon_font_notice;
 mod icons;
 mod input;
 mod integrations;
+#[cfg(windows)]
+mod jump_list;
 mod keymap;
+#[cfg(windows)]
+mod launch_at_login;
 mod lenient;
+mod link;
 mod links;
 mod listening_ports;
 mod local_path;
 mod log_window;
 mod login_env;
+mod mark_layer;
 mod menu;
 mod menus;
 mod merged_cleanup;
@@ -92,6 +104,7 @@ mod network_quality;
 mod notifications;
 mod orchestrator;
 mod osc52;
+mod overview;
 mod palette;
 mod pane_menu;
 mod pane_move;
@@ -110,9 +123,11 @@ mod release_notes;
 mod remote_browser;
 mod reorder;
 mod repo_items;
+mod restart_manager;
 mod review;
 mod scrollback;
 mod search_input;
+mod security;
 mod sessions;
 mod settings_panel;
 mod settings_window;
@@ -139,6 +154,7 @@ mod updater;
 mod usage;
 mod window;
 mod window_state;
+mod words;
 mod worktree;
 mod worktree_banner;
 mod worktree_notes;
@@ -156,7 +172,7 @@ pub use error::{Error, Result};
 pub(crate) use {
     actions::{
         CheckForUpdates, Hide, HideOthers, Minimize, PlaySound, Quit, RunCommand, ShowAll,
-        ShowHerdrNotDetected, ShowLogs, ShowUpdatePreview, bind_keys,
+        ShowHerdrNotDetected, ShowLogs, ShowUpdatePreview, ZoomWindow, bind_keys,
     },
     app::open_additional_window,
     constants::{APP_VERSION, RELEASE_BUILD, TAB_HEIGHT, TAB_WIDTH, WINDOW_TITLE},

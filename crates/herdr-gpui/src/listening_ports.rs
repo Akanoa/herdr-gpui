@@ -3,7 +3,7 @@
 //!
 //! Every host has its own worker thread scanning it every few seconds through
 //! one long-lived `sh`: a local one for this machine, the host's own over SSH
-//! for a remote one. The UI thread only starts and stops workers and takes
+//! for a remote one, and a distribution's own through `wsl.exe` for WSL. The UI thread only starts and stops workers and takes
 //! their answers on later ticks, so a slow `lsof` or an unreachable host never
 //! blocks rendering or delays another host.
 
@@ -115,7 +115,10 @@ fn open(host: &Host) -> Result<Shell> {
     match host {
         Host::Local => local_shell(),
         Host::Ssh(target) => Shell::connect(target),
-        Host::Wsl(_) => Err(Error::WslHostUnsupported),
+        // A distribution is scanned as a Linux host, with its own `ss`.
+        Host::Wsl(distro) => Shell::connect_wsl(distro),
+        #[cfg(feature = "azure")]
+        Host::Azure { .. } => Err(Error::CloudHostUnsupported),
     }
     .map_err(failed)
 }

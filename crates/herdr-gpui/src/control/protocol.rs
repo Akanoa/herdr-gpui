@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 /// Raised whenever a request or reply changes shape, so `status` can tell
 /// an outdated app from a refused request. 3: `browser.open` placement.
-pub(crate) const PROTOCOL_VERSION: u32 = 3;
+/// 4: `link`. 5: the `tab` family's `zoom`.
+pub(crate) const PROTOCOL_VERSION: u32 = 5;
 
 /// Older apps and clients know only tabs, so a tab is left off the wire.
 fn is_tab(placement: &Placement) -> bool {
@@ -58,6 +59,16 @@ pub(crate) enum Request {
     Settings(Call<settings::SettingsOp>),
     #[serde(rename = "events")]
     Events(Call<events::EventsOp>),
+    #[serde(rename = "link")]
+    Link(Call<LinkOp>),
+}
+
+/// A `herdr-gpui://` link the shell started a second copy of the app with.
+/// The app parses it again: any local process can send one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LinkOp {
+    pub url: String,
 }
 
 /// A request of a family other than the browser's: who asks, and what.

@@ -166,6 +166,7 @@ fn live_local_usage() {
         &Host::Local,
         &UsageConfig::default(),
         &HashSet::new(),
+        &HashSet::new(),
         &mut jar,
         |provider, report| {
             match report {

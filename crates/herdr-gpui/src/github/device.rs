@@ -98,6 +98,8 @@ pub(crate) struct Profile {
     /// account: the owners it covers besides its own login. `None` until
     /// GitHub listed them, so a failed listing is not mistaken for none.
     pub organizations: Option<Vec<String>>,
+    /// What a GitHub App sign-in still needs installed or approved.
+    pub access: super::installation::Access,
 }
 
 #[cfg(test)]
@@ -116,6 +118,7 @@ impl Profile {
                     .map(|name| (*name).to_owned())
                     .collect(),
             ),
+            access: Default::default(),
         }
     }
 }
@@ -189,6 +192,7 @@ pub(super) fn profile_from(token: Arc<SecretString>, github_cli: bool) -> Result
         avatar_updates,
         source,
         organizations: None,
+        access: Default::default(),
     })
 }
 
@@ -202,6 +206,29 @@ impl Profile {
             self.organizations = old.organizations.clone();
         }
     }
+
+    /// Keeps the access `old` found when this check could not tell, so a
+    /// failed request neither raises nor clears the attention dot. Only for
+    /// an App token: any other is never checked, so its `Unknown` is final
+    /// and an App's old warning does not apply to it.
+    pub(super) fn keep_access(&mut self, old: &Self) {
+        if self.access == super::installation::Access::Unknown
+            && self.login == old.login
+            && super::installation::app_token(&self.token)
+        {
+            self.access = old.access.clone();
+        }
+    }
+}
+
+/// `profile` with what its GitHub App installations still need. A failed
+/// check is only logged: the account works for public repositories either way.
+pub(super) fn with_access(mut profile: Profile) -> Profile {
+    match super::installation::check(&profile.token) {
+        Ok(access) => profile.access = access,
+        Err(error) => log::failure("installations", &error),
+    }
+    profile
 }
 
 const ORGANIZATIONS: &str = "query { viewer { organizations(first: 100) { nodes { login } } } }";

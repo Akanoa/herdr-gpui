@@ -64,7 +64,17 @@ pub(crate) fn valid_owner(owner: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
+/// Herdr GPUI's own GitHub App, used unless another client is configured.
+const DEFAULT_CLIENT_ID: &str = "Iv23liurUcwxPjrdIFYT";
+
 impl GitHubConfig {
+    /// Where to install the App sign-in uses, known only for Herdr GPUI's
+    /// own: another App's page cannot be found from its client ID.
+    pub fn app_install_url(&self) -> Option<&'static str> {
+        (self.client_id().ok().flatten().as_deref() == Some(DEFAULT_CLIENT_ID))
+            .then_some("https://github.com/apps/herdr-ui/installations/new")
+    }
+
     pub fn client_id(&self) -> Result<Option<String>> {
         self.client_id_with_override(env::var_os("HERDR_GITHUB_OAUTH_CLIENT_ID").as_deref())
     }
@@ -79,11 +89,7 @@ impl GitHubConfig {
                 "HERDR_GITHUB_OAUTH_CLIENT_ID",
             ),
             None => (
-                Some(
-                    self.oauth_client_id
-                        .as_deref()
-                        .unwrap_or("Iv23liurUcwxPjrdIFYT"),
-                ),
+                Some(self.oauth_client_id.as_deref().unwrap_or(DEFAULT_CLIENT_ID)),
                 "github.oauth_client_id",
             ),
         };

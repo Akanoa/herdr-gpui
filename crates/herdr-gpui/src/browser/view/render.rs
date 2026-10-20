@@ -328,6 +328,7 @@ impl HerdrWindow {
                             .child(flash.text.clone())
                     }),
             )
+            .children(self.zoom_chip(slot, tab, cx))
             .children(annotate_button)
             .child(self.toolbar_button(
                 slot,
@@ -491,7 +492,8 @@ impl HerdrWindow {
     ) {
         Store::update(cx, |store| store.visited(id, Some(location.clone()), None));
         #[cfg(any(target_os = "macos", windows))]
-        if self.browser.pages.contains(id) {
+        {
+            // A page still being built goes there once built.
             self.browser.pages.load(id, &location);
             self.browser.pages.focus(id);
         }

@@ -64,6 +64,8 @@ pub(crate) struct MenuState {
     /// The saved distribution the removal confirmation names.
     pub(super) wsl_remove: Option<String>,
     pub(super) session_edit: Option<super::sessions::Edit>,
+    /// The folder the open-checkout question is about.
+    pub(super) open_checkout: Option<std::path::PathBuf>,
     /// The address the open-link question is about.
     pub(super) open_link: Option<crate::terminal::ExternalUrl>,
     #[cfg(feature = "coder")]
@@ -136,6 +138,8 @@ pub(crate) struct MenuState {
     pub(super) github_adding: Option<String>,
     /// The pasted-token field, while the GitHub page shows it.
     pub(super) github_token: Option<Entity<crate::search_input::SearchInput>>,
+    /// Logins this window already toasted as waiting on GitHub App approval.
+    pub(super) github_toasted: std::collections::HashSet<String>,
     /// Saved devices whose removal is running, by endpoint ID. Kept after
     /// success until the catalog drops the device, so its header pulses
     /// until it disappears; the confirmation closes as soon as it starts.
@@ -311,6 +315,7 @@ impl MenuState {
             wsl_setup: None,
             wsl_remove: None,
             session_edit: None,
+            open_checkout: None,
             open_link: None,
             #[cfg(feature = "coder")]
             coder: None,
@@ -359,6 +364,7 @@ impl MenuState {
             github_account: None,
             github_adding: None,
             github_token: None,
+            github_toasted: Default::default(),
             removing_devices: Default::default(),
             github_selected: None,
             github_scroll: ScrollHandle::new(),
@@ -381,6 +387,7 @@ impl MenuState {
         self.wsl_setup = None;
         self.wsl_remove = None;
         self.session_edit = None;
+        self.open_checkout = None;
         self.open_link = None;
         #[cfg(feature = "coder")]
         {

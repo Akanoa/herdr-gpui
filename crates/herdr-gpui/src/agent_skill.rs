@@ -295,20 +295,30 @@ mod tests {
     /// every agent's frontmatter parser, hiding the skill from agents.
     #[test]
     fn the_skill_description_is_a_quoted_scalar() {
-        let frontmatter = SKILL
+        assert!(!description(SKILL).contains('"'));
+    }
+
+    /// The Agent Skills format caps a description at 1,024 characters, and
+    /// agents such as Pi refuse a skill over it.
+    #[test]
+    fn the_skill_description_fits_the_agent_skills_limit() {
+        let length = description(SKILL).chars().count();
+        assert!((1..=1024).contains(&length), "{length} characters");
+    }
+
+    /// The frontmatter's description, without its quotes.
+    fn description(skill: &str) -> &str {
+        skill
             .strip_prefix("---\n")
             .and_then(|rest| rest.split_once("\n---\n"))
-            .map(|(frontmatter, _)| frontmatter)
-            .unwrap();
-        let description = frontmatter
-            .lines()
-            .find_map(|line| line.strip_prefix("description: "))
-            .unwrap();
-        let value = description
-            .strip_prefix('"')
+            .and_then(|(frontmatter, _)| {
+                frontmatter
+                    .lines()
+                    .find_map(|line| line.strip_prefix("description: "))
+            })
+            .and_then(|value| value.strip_prefix('"'))
             .and_then(|value| value.strip_suffix('"'))
-            .unwrap();
-        assert!(!value.contains('"'));
+            .unwrap()
     }
 
     #[test]

@@ -32,6 +32,9 @@ herdr-gpui browser close|back|forward|text TAB
     Close a page tab, go back or forward in it, or print its visible text.
 herdr-gpui browser navigate TAB URL
     Load another web address in a page tab.
+herdr-gpui browser zoom TAB +|-|reset|PERCENT
+    Zoom a page tab in or out a step, back to 100%, or to PERCENT (50-300),
+    as the font size keys do while it is focused. The tab keeps its zoom.
 herdr-gpui browser screenshot TAB PATH
     Save a PNG of the page (macOS).
 herdr-gpui browser skill
@@ -52,14 +55,17 @@ fn family(name: &str) -> &'static str {
         "app" => {
             "herdr-gpui app focus|hide|quit\n    Bring the app forward, hide it, or quit it. Quitting leaves Herdr\n    and its terminals running."
         }
+        "open" => {
+            "herdr-gpui open DIR\n    Open the folder as Open Project in the command palette does: focus its\n    workspace, or start one there, and bring the window forward. DIR must\n    be an existing folder. With no Herdr UI running, starts it and waits up\n    to 20 seconds for its window to reach the local Herdr (exit 7 past that)."
+        }
         "window" => {
             "herdr-gpui window [list]\n    The app's windows, with IDs for --window.\nherdr-gpui window new [--session NAME]\n    Open another window: of the caller's own Herdr session, of a named\n    local session, or outside Herdr of the frontmost window's host.\nherdr-gpui window focus ID\nherdr-gpui window fullscreen [on|off|toggle]\nherdr-gpui window size [WIDTHxHEIGHT]\n    Print the window's size, or resize it. Windows cannot be moved.\nherdr-gpui window detach|reconnect\n    Detach from, or reconnect to, the window's selected host."
         }
         "ui" => {
-            "herdr-gpui ui sidebar [on|off|toggle]\nherdr-gpui ui statusbar [on|off|toggle]\nherdr-gpui ui font-size +|-|reset|POINTS\n    For this window and session; settings are changed with `config`."
+            "herdr-gpui ui sidebar [on|off|toggle]\nherdr-gpui ui statusbar [on|off|toggle]\nherdr-gpui ui font-size +|-|reset|POINTS\nherdr-gpui ui panel workspaces|overview|pull-requests|issues|security|usage\n    For this window and session; settings are changed with `config`."
         }
         "tab" => {
-            "herdr-gpui tab [list]\n    The app's own tabs: pages, code, reviews, the orchestrator, Devices.\n    Terminal tabs belong to Herdr: use `herdr tab`.\nherdr-gpui tab focus|close ID\n    Show a tab, switching to its workspace, or close it."
+            "herdr-gpui tab [list]\n    The app's own tabs: pages, code, reviews, Devices.\n    Terminal tabs belong to Herdr: use `herdr tab`.\nherdr-gpui tab focus|close ID\n    Show a tab, switching to its workspace, or close it."
         }
         "code" => {
             "herdr-gpui code open FILE[:LINE]\n    Show a local file read-only in a code tab, at LINE.\nherdr-gpui code edit FILE[:LINE]\n    Open it in your terminal editor ($VISUAL, $EDITOR) in a new pane."
@@ -68,7 +74,7 @@ fn family(name: &str) -> &'static str {
             "herdr-gpui devices [open]\n    Open the Devices overview tab in the caller's workspace."
         }
         "orchestrator" => {
-            "herdr-gpui orchestrator [open] [--repo PATH]\n    Open the orchestrator of the caller's checkout, or of PATH.\nherdr-gpui orchestrator items|issues|prs [--repo PATH]\n    List what it last synced, from its local database (no network).\n    Runs here; Herdr UI need not run. Exits 4 before its first sync."
+            "herdr-gpui orchestrator [open] [--repo PATH]\n    Show the Issues section narrowed to the caller's project, or PATH's.\nherdr-gpui orchestrator items|issues|prs [--repo PATH]\n    List what it last synced, from its local database (no network).\n    Runs here; Herdr UI need not run. Exits 4 before its first sync."
         }
         "review" => {
             "herdr-gpui review [open]\n    Open the review of the caller's workspace's uncommitted changes."
@@ -107,6 +113,9 @@ fn family(name: &str) -> &'static str {
             "herdr-gpui processes [--pane ID]\n    The processes under a pane (default HERDR_PANE_ID), with CPU and\n    memory. Runs here; Herdr UI need not run."
         }
         "usage" => "herdr-gpui usage\n    AI plan usage on the window's selected host.",
+        "security" => {
+            "herdr-gpui security\n    Private vulnerability reports in triage (titles only) and open\n    Dependabot alerts of the github.com repositories the window's\n    workspaces hold, most severe first, as the Security section last read\n    them (sign in to GitHub first). Exits 4 when there are none.\n    `ui panel security` shows the section.\nherdr-gpui security open REPOSITORY ALERT|GHSA\n    Show alert ALERT (its number) or private report GHSA (its GHSA ID) of\n    REPOSITORY (owner/name) in the Security section, beside its list, as\n    the section last read it."
+        }
         "system" => {
             "herdr-gpui system\n    The window's selected host's load, when Herdr UI samples it."
         }

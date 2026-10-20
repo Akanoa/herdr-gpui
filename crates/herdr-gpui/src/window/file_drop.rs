@@ -1,5 +1,6 @@
 //! External paths paste locally; one supported image on SSH uses the daemon's
-//! image bridge. A drop never submits the terminal command.
+//! image bridge, and a WSL distribution is given its own paths for them. A
+//! drop never submits the terminal command.
 
 use super::{
     HerdrWindow,
@@ -101,9 +102,10 @@ impl HerdrWindow {
     }
 
     /// Paste external files into `target` the way a drop does: quoted local
-    /// paths on a local pane, the image bridge for one image on a remote pane,
-    /// and a file copy for anything else there. Files copied in Finder and
-    /// pasted with Cmd-V take this path too.
+    /// paths on a local pane, the distribution's paths for them on a WSL pane,
+    /// the image bridge for one image on another remote pane, and a file copy
+    /// for anything else there. Files copied in Finder and
+    /// pasted with Cmd-V take this path too. Refused when nothing was sent.
     pub(super) fn paste_files(
         &mut self,
         target: InputTarget,
@@ -144,6 +146,16 @@ impl HerdrWindow {
         // pane that is not ready refuses the files instead.
         let remote = self.selected_is_remote();
         let result = quote_paths(paths).and_then(|text| {
+            if let herdr_client::ConnectTarget::Wsl { distro, .. } =
+                &self.endpoints[self.selected_endpoint].connection.target
+            {
+                if !self.accepts_remote_images() {
+                    return Err(Error::ConnectionNotReady);
+                }
+                return self
+                    .paste_wsl_files(target.clone(), distro.clone(), paths.to_vec(), cx)
+                    .map(|()| Delivery::Queued);
+            }
             if remote {
                 if !self.accepts_remote_images() {
                     return Err(Error::ConnectionNotReady);
@@ -154,6 +166,14 @@ impl HerdrWindow {
                     return Ok(self.start_remote_image(target.clone(), source, Some(text), cx));
                 }
                 return Ok(self.start_file_transfer(target.clone(), paths.to_vec(), cx));
+            }
+            // The pane's processes cannot open a live screenshot thumbnail,
+            // so its bytes go through the image bridge as a clipboard image's
+            // do; the path is still pasted if the file cannot be read.
+            if self.accepts_image_input()
+                && let Some(source) = super::image_source::temporary_drag_image(paths)
+            {
+                return Ok(self.start_remote_image(target.clone(), source, Some(text), cx));
             }
             let endpoint = &self.endpoints[self.selected_endpoint];
             let handle = endpoint

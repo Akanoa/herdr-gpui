@@ -96,7 +96,7 @@ impl Release {
                 return false;
             }
             state.set_outer_focus(false);
-            state.surface = None;
+            state.invalidate_surface();
             state.dirty = true;
             let result = handle
                 .set_focus(&self.boot, false)
@@ -230,6 +230,14 @@ impl Endpoint {
             initial_surface: false,
             sounds: Default::default(),
         }
+    }
+
+    /// Keeps a test fixture's endpoint from dialing its made-up target, whose
+    /// failure would otherwise drop the window back to Local at a moment that
+    /// depends on the machine's speed.
+    #[cfg(test)]
+    pub(crate) fn never_connect(&mut self) {
+        self.retry_at = Instant::now() + Duration::from_secs(3600);
     }
 
     fn stop(&mut self) {
@@ -496,7 +504,7 @@ impl HerdrWindow {
         self.selected_generation = endpoint.generation;
         self.live = endpoint.live.clone();
         if !endpoint.initial_surface {
-            self.live.surface = None;
+            self.live.invalidate_surface();
         }
         // Another connection's picture is not this one's, so a detach or a
         // retarget starts from an empty terminal area. A reconnect after a drop
@@ -689,10 +697,10 @@ impl HerdrWindow {
             }
         } else if let Ok(mut state) = endpoint.connection.inbox.try_lock() {
             state.set_outer_focus(false);
-            state.surface = None;
+            state.invalidate_surface();
         }
         endpoint.initial_surface = false;
-        endpoint.live.surface = None;
+        endpoint.live.invalidate_surface();
     }
 
     pub(super) fn navigate_endpoint(

@@ -390,12 +390,12 @@ pub(crate) fn menus(layout: Layout) -> Vec<Menu> {
                 MenuItem::action("Show Homebrew update progress", ShowUpdateHomebrewPreview),
                 MenuItem::action("Play Sound", PlaySound),
                 MenuItem::action("Ring Bell in 3 Seconds", RingBellPreview),
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 MenuItem::action(
                     "Enable badge",
                     crate::actions::SetBadgePreview { enabled: true },
                 ),
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 MenuItem::action(
                     "Disable badge preview",
                     crate::actions::SetBadgePreview { enabled: false },

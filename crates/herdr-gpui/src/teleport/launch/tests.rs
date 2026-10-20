@@ -22,6 +22,7 @@ fn pane(agent: Option<&str>, session: Option<AgentSession>) -> Pane {
         foreground_cwd: None,
         agent: agent.map(Into::into),
         agent_session: session,
+        working: false,
     }
 }
 

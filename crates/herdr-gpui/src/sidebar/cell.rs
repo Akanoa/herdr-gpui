@@ -42,6 +42,16 @@ pub(super) struct RowContext<'a> {
     pub(super) host: Option<&'a str>,
 }
 
+impl RowContext<'_> {
+    /// The indicators for a status mark in one of these rows: faded with
+    /// the row's own fade and the host's dimming, which a mark drawn in the
+    /// window's mark layer does not inherit.
+    pub(super) fn status_indicators(&self) -> super::agents::Indicators {
+        self.indicators
+            .faded(self.indicators.fade() * self.mark.opacity())
+    }
+}
+
 /// A click listener, erased so rows of every group share one type.
 pub(super) type ClickHandler = dyn Fn(&ClickEvent, &mut Window, &mut App);
 
@@ -103,6 +113,9 @@ pub(super) struct AgentRow<'a> {
     /// Its workspace and, when that earns a place, its tab. Missing once the
     /// workspace has gone.
     pub(super) place: Option<(&'a str, Option<&'a str>)>,
+    /// Its pane's name: Rename's label, else the pane's title, and never the
+    /// agent name again. Safe, bounded text.
+    pub(super) pane: Option<String>,
     /// The daemon's `state_text` word when its sidebar config asks for it, so
     /// the GUI and the TUI name the status the same way: the agent's own
     /// state label when its integration set one.

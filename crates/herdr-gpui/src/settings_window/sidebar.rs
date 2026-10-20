@@ -17,17 +17,21 @@ pub(super) enum SidebarKey {
     HostGap,
     Select,
     DeviceFooter,
+    ActivityBar,
+    ChangeCounts,
     Host(String),
 }
 
 impl SidebarKey {
-    const FIXED: [Self; 6] = [
+    const FIXED: &[Self] = &[
         Self::Indent,
         Self::RowPadding,
         Self::Gap,
         Self::HostGap,
         Self::Select,
         Self::DeviceFooter,
+        Self::ActivityBar,
+        Self::ChangeCounts,
     ];
 
     /// Copies this key's value from `from` into `to`.
@@ -40,6 +44,8 @@ impl SidebarKey {
             Self::HostGap => new.host_gap = old.host_gap,
             Self::Select => to.select = from.select,
             Self::DeviceFooter => to.device_footer = from.device_footer,
+            Self::ActivityBar => to.activity_bar = from.activity_bar,
+            Self::ChangeCounts => to.change_counts = from.change_counts,
             Self::Host(host) => match from.hosts.get(host) {
                 Some(color) => {
                     to.hosts.insert(host.clone(), *color);
@@ -61,6 +67,8 @@ impl SidebarKey {
             Self::HostGap => Preference::SidebarHostGap(overrides.host_gap),
             Self::Select => Preference::SidebarSelect(style.select),
             Self::DeviceFooter => Preference::SidebarDeviceFooter(style.device_footer),
+            Self::ActivityBar => Preference::SidebarActivityBar(style.activity_bar),
+            Self::ChangeCounts => Preference::SidebarChangeCounts(style.change_counts),
             Self::Host(host) => Preference::HostColor {
                 host: host.clone(),
                 color: style.hosts.get(host).copied(),
@@ -77,6 +85,8 @@ impl SidebarKey {
             Self::HostGap => old.host_gap != new.host_gap,
             Self::Select => before.select != after.select,
             Self::DeviceFooter => before.device_footer != after.device_footer,
+            Self::ActivityBar => before.activity_bar != after.activity_bar,
+            Self::ChangeCounts => before.change_counts != after.change_counts,
             Self::Host(host) => before.hosts.get(host) != after.hosts.get(host),
         }
     }
@@ -97,7 +107,8 @@ impl SidebarTouched {
             .map(|host| SidebarKey::Host(host.clone()));
         Self(
             SidebarKey::FIXED
-                .into_iter()
+                .iter()
+                .cloned()
                 .chain(hosts)
                 .filter(|key| key.differs(before, after))
                 .collect(),

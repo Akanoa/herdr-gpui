@@ -51,6 +51,7 @@ impl HerdrWindow {
         .detach();
     }
 
+    #[track_caller]
     pub(crate) fn navigate(
         &mut self,
         target: NavigationTarget<&str>,
@@ -65,7 +66,15 @@ impl HerdrWindow {
     /// Back or Forward along the selected endpoint's focus trail. The trail
     /// remembers the step only once its request is queued, so a press while
     /// an earlier one is still landing leaves that one in charge.
-    pub(crate) fn travel(&mut self, step: Step, cx: &mut Context<Self>) {
+    pub(crate) fn travel(&mut self, step: Step, window: &mut Window, cx: &mut Context<Self>) {
+        // A pane a section opened goes back to that section first.
+        if step == Step::Back
+            && self.activity_section().is_none()
+            && let Some(panel) = self.activity.return_to
+        {
+            self.show_activity_panel(panel, window, cx);
+            return;
+        }
         let Some(snapshot) = self.live.snapshot.clone() else {
             return;
         };
@@ -82,6 +91,12 @@ impl HerdrWindow {
     }
 
     pub(crate) fn can_travel(&self, step: Step) -> bool {
+        if step == Step::Back
+            && self.activity_section().is_none()
+            && self.activity.return_to.is_some()
+        {
+            return true;
+        }
         self.live.snapshot.as_deref().is_some_and(|snapshot| {
             self.endpoints[self.selected_endpoint]
                 .history
@@ -90,6 +105,7 @@ impl HerdrWindow {
     }
 
     /// Complete an accepted navigation even if its context menu has since opened.
+    #[track_caller]
     pub(crate) fn dispatch_navigation(
         &mut self,
         target: NavigationTarget<&str>,
@@ -113,6 +129,7 @@ impl HerdrWindow {
 
     /// `label` is what a failure is reported as, not a method name: navigation
     /// picks its method from the target, so it reports itself by name.
+    #[track_caller]
     pub(crate) fn request_focus_change(
         &mut self,
         label: &str,
@@ -129,6 +146,9 @@ impl HerdrWindow {
             if let Err(error) = enqueue(handle, &snapshot.boot_id) {
                 self.local_error = Some(format!("{label}: {error}"));
             } else {
+                #[cfg(feature = "integration-test")]
+                self.navigations
+                    .record(label, focus.as_ref(), std::panic::Location::caller());
                 self.fence_focus_change(focus);
                 return true;
             }
@@ -166,7 +186,7 @@ impl HerdrWindow {
                 focus,
                 active: true,
             });
-            state.surface = None;
+            state.invalidate_surface();
             state.dirty = true;
             self.live = state.clone();
             self.activation_deadline = Some(
@@ -409,6 +429,8 @@ impl HerdrWindow {
                 return;
             }
             Command::ToggleSidebar => self.toggle_sidebar(),
+            Command::FocusNextRegion => return self.cycle_region(true, window, cx),
+            Command::FocusPreviousRegion => return self.cycle_region(false, window, cx),
             // Window chrome only, so it runs while the daemon is still away.
             Command::ToggleStatusBar => {
                 self.status_bar_visible = !self.status_bar_visible;
@@ -422,6 +444,13 @@ impl HerdrWindow {
             }
             Command::DevicesOverview => {
                 self.open_devices_overview(window, cx);
+                return;
+            }
+            // A focused page zooms instead of the terminal font, and keeps
+            // the keyboard if it held it.
+            Command::IncreaseFontSize | Command::DecreaseFontSize | Command::ResetFontSize
+                if self.zoom_focused_page(command, cx) =>
+            {
                 return;
             }
             Command::IncreaseFontSize | Command::DecreaseFontSize => {
@@ -505,8 +534,10 @@ impl HerdrWindow {
                     Command::Back => Step::Back,
                     _ => Step::Forward,
                 };
-                self.travel(step, cx);
-                window.focus(&self.focus, cx);
+                self.travel(step, window, cx);
+                if self.activity_section().is_none() {
+                    window.focus(&self.focus, cx);
+                }
                 return;
             }
             Command::PreviousWorkspace
@@ -517,6 +548,10 @@ impl HerdrWindow {
             | Command::AgentNumber(_) => {
                 self.step_sidebar(command, cx);
                 window.focus(&self.focus, cx);
+                return;
+            }
+            // A browser tab moves without the daemon, so before its check.
+            Command::MoveTabPrevious | Command::MoveTabNext if self.move_page_tab(command, cx) => {
                 return;
             }
             Command::MoveTabPrevious | Command::MoveTabNext if !self.live.supports_tab_move => {

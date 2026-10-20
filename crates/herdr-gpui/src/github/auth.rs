@@ -5,8 +5,12 @@
 #[cfg(any(test, feature = "integration-test"))]
 use super::VERIFY_URL;
 use super::{
-    Account, Device, Profile, Reply, Result, SETUP_MESSAGE, Store, cli, device::with_organizations,
-    http::oauth, log, profile, save, store::save_github_cli, token_reply, valid_token,
+    Account, Device, Profile, Reply, Result, SETUP_MESSAGE, Store, cli,
+    device::{with_access, with_organizations},
+    http::oauth,
+    log, profile, save,
+    store::save_github_cli,
+    token_reply, valid_token,
 };
 use crate::Error;
 use secrecy::{ExposeSecret, SecretString};
@@ -28,6 +32,9 @@ pub(super) struct Flow {
 const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// How long the GitHub CLI's answer stands before the page asks it again.
 const CLI_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+/// How soon an account waiting on GitHub App approval is checked again once
+/// the user looks at it.
+const ACCESS_RECHECK: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(crate) struct Auth {
@@ -83,6 +90,7 @@ impl Auth {
                 avatar_updates: None,
                 source: super::Source::Token,
                 organizations: None,
+                access: Default::default(),
             }),
             ..Self::default()
         }
@@ -459,6 +467,22 @@ impl Auth {
         self.cancelled = false;
         self.message = Some("Signed out locally. Removing saved GitHub credential...".into());
     }
+    /// Check the account again soon, for a user who may just have approved
+    /// its GitHub App on GitHub. At most every 30 seconds, and only while
+    /// something is waiting on them.
+    pub(crate) fn recheck_access(&mut self, now: Instant) {
+        if self
+            .profile
+            .as_ref()
+            .is_none_or(|profile| !profile.access.needs_attention())
+        {
+            return;
+        }
+        let soon = now + ACCESS_RECHECK;
+        if self.next_session_check.is_some_and(|next| next > soon) {
+            self.next_session_check = Some(soon);
+        }
+    }
     pub fn poll(&mut self) -> bool {
         let store = self.store;
         let account = self.account.clone();
@@ -563,6 +587,7 @@ impl Auth {
                         Ok(mut profile) => {
                             if let (Some(old), Some(new)) = (&self.profile, &mut profile) {
                                 new.keep_organizations(old);
+                                new.keep_access(old);
                                 if old.token.expose_secret() == new.token.expose_secret() {
                                     // PR caches use token identity to fence workers.
                                     new.token = old.token.clone();
@@ -760,9 +785,10 @@ impl Auth {
     }
 }
 
-/// A loaded account, with what an additional account also needs: the
-/// organizations whose repositories it covers.
+/// A loaded account, with what its GitHub App installations still need and
+/// what an additional account also needs: the organizations it covers.
 fn complete(profile: Profile, account: &Account) -> Profile {
+    let profile = with_access(profile);
     match account {
         Account::Additional(_) => with_organizations(profile),
         Account::Main | Account::Host(_) => profile,

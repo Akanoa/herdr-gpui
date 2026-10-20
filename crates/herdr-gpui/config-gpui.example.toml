@@ -18,7 +18,9 @@
 # brings up a dismissible card naming a Nerd Font to install.
 # Saved changes to the local file reload automatically in every GUI window.
 
-# Built-ins: Default, Nord, Dracula, Catppuccin Mocha, Catppuccin Latte.
+# Built-ins: Default, Nord, Dracula, Catppuccin Mocha, Catppuccin Latte, plus
+# popular Ghostty themes compiled in, such as TokyoNight, Gruvbox Dark,
+# Rose Pine, Atom One Dark, and GitHub Light Default (Settings lists them all).
 # Also accepts a Ghostty theme name, an absolute path, or a ~/ path.
 # Set "Follow Herdr" in config-gpui.local.toml to follow the local Herdr theme.
 # On an Omarchy desktop, "Omarchy" follows its current theme as it switches,
@@ -32,6 +34,10 @@ theme = "Default"
 # "high" raises them and dim labels to 4.5:1 and makes selected rows stand out
 # more. Terminal output always keeps its program's colors.
 contrast = "standard"
+# The app's own accent (the current tab, selected rows): "theme" takes it from
+# the theme, "system" from Windows Settings > Personalization > Colors.
+# Other platforms keep the theme's. Terminal colors never change with it.
+accent = "theme"
 
 # Ask before closing a tab (closing terminates its terminal processes).
 confirm_close_tab = true
@@ -49,6 +55,11 @@ confirm_close_workspace = true
 remove_merged_worktrees = false
 # Show the Agents section below Spaces in the sidebar.
 show_agents = true
+# Show the Agents title row, with the sort toggle on its right. Hidden, the
+# order follows Herdr's `ui.agent_panel_sort` until you toggle it, unless a
+# plugin sets the agent view, which keeps the header shown. Also under
+# Settings > Sidebar.
+show_agents_header = true
 # Where the sidebar lists agents while show_agents is on: "panel", their own
 # section below Spaces, or "nested", under the workspace each one runs in.
 # Also under Settings > Sidebar.
@@ -60,12 +71,14 @@ show_sidebar_search = true
 # name in the sidebar, in the layouts that draw one (not orca or minimal).
 # Also under Settings > Sidebar.
 show_repository_icons = true
-# Draw agent status as icons instead of Herdr's dots or symbols: "solid"
-# (filled discs), "tiles" (each mark on a tinted tile), or "rail" (outline
-# marks plus a bar on the edge of each working, done, or blocked row). Only
-# this app draws them; unset follows Herdr's `ui.status_indicators`.
-# Also under Settings > Notifications > Icons.
-# status_icons = "solid"
+# How agent status is drawn: "dots" (the default), "solid", "outline",
+# "tiles", "wave" (Superset's grid), "braille", or "orca". Only this app reads
+# it; Herdr's `ui.status_indicators` stays the terminal client's. Working always
+# moves. Also under Settings > Appearance > Indicators.
+# status_icons = "dots"
+# Draw a bar on the leading edge of each working, done, or blocked row, with
+# any set. Also under Settings > Appearance > Indicators.
+# edge_rail = false
 # Show a mark before each device's name in the sidebar for where it runs: this
 # machine, a cloud provider, Tailscale, or SSH. In the layouts that draw one
 # (not orca or minimal). Also under Settings > Sidebar.
@@ -95,6 +108,12 @@ show_network_quality = false
 # and momentum; false scrolls by whole rows. Applications reading the mouse
 # always get whole rows. Also under Settings > General.
 smooth_scroll = true
+# Linux only: draw minimize, maximize, and close buttons at the right end of the
+# menu bar. When true the window needs no title bar from the window manager;
+# disable server-side decorations in your compositor or window manager settings.
+# On Wayland without server-side decorations (GNOME), buttons are always shown
+# regardless of this setting.
+# show_window_controls = true
 
 # Focus split terminal panes on hover in the active window, without clicking.
 focus_follows_mouse = true
@@ -321,6 +340,19 @@ size = 12
 # keep their shortcuts and command palette entries, and Devices Overview in
 # the palette still offers Add Device.
 # device_footer = "always"
+# Whose +added/-deleted line counts a worktree row shows: "pr" (its cached
+# pull request's) or "local" (the checkout's uncommitted changes against HEAD,
+# for checkouts on this machine, drawn inside the pencil chip that marks
+# uncommitted work). Only one set is shown. Local counts reuse
+# the uncommitted-work probe's slow schedule: one checkout at a time, each at
+# most every 30 seconds while the window is active.
+# change_counts = "pr"
+
+# The activity bar: an icon column at the window's left edge. Workspaces is
+# the sidebar beside the terminals; Orchestrator, Pull requests, and Issues
+# show the focused workspace's orchestrator across the window on that list.
+# Settings sits at its foot. false keeps the plain sidebar.
+# activity_bar = true
 
 # A colour per host, keyed by the host's name in the sidebar, as #rgb or
 # #rrggbb. It washes the host's header, its workspace rows, and its agents'
@@ -486,6 +518,9 @@ size = 12
 # Blur the desktop behind a translucent window: macOS, Windows, and Wayland
 # compositors with KDE's blur protocol.
 # blur = false
+# What blur paints on Windows 11: "acrylic" (the windows behind, blurred) or
+# "mica" (the wallpaper). Ignored elsewhere.
+# material = "acrylic"
 # A picture behind the window, absolute or under ~/. The window stays opaque
 # over it; lower opacity shows more of it.
 # image = "~/Pictures/wallpaper.jpg"
@@ -545,7 +580,10 @@ size = 12
 # topbar = true
 # Honor the daemon's [ui.sidebar] rows and plugin tokens; false uses native layouts.
 # inline = true
-# Show these even when no sign-in was found, with what to set up.
+# Show these even when no sign-in was found, with what to set up. On the Mac
+# running Herdr, JetBrains AI, Kiro, and Windsurf are only read when listed
+# here, as macOS may ask before Herdr reads another app's data. Muse's
+# keychain sign-in, like Zed's, also waits for Allow in its usage panel.
 # show_providers = ["cursor", "openrouter"]
 # Never show these, even when signed in.
 # hide_providers = []
@@ -859,7 +897,9 @@ size = 12
 #   Support/JetBrains/IntelliJIdea2025.3" on a Mac or
 #   "~/.config/JetBrains/PyCharm2025.3" on Linux. Its
 #   options/AIAssistantQuotaManager2.xml appears once AI Assistant has been
-#   used.
+#   used. On the Mac running Herdr the IDEs are only looked for when this is set
+#   or jetbrains is in show_providers, as macOS may ask before Herdr reads
+#   another app's data.
 # ide_path = ""
 #
 # Moonshot / Kimi Open Platform (moonshot)
@@ -954,7 +994,9 @@ size = 12
 #   and devin_primary_org_id into one JSON object: {"devin_session_token":
 #   "…", "devin_auth1_token": "…", "devin_account_id": "…",
 #   "devin_primary_org_id": "…"}. Without it, the plan the Windsurf editor
-#   cached at its last launch is shown.
+#   cached at its last launch is shown; on the Mac running Herdr only when
+#   windsurf is in show_providers, as macOS may ask before Herdr reads another
+#   app's data.
 # session = ""
 #
 # Zed (zed)
@@ -1314,8 +1356,10 @@ size = 12
 # [usage.providers.muse]
 #   A Muse CLI device-code access token (it starts with dca:), used when this
 #   host has no `muse login`. It is providers.meta.access_token in
-#   ~/.config/muse/auth.json on a machine where you ran `muse login`. Dashboard
-#   LLM_ keys and LLM| inference keys are not accepted.
+#   ~/.config/muse/auth.json on a machine where you ran `muse login`. On a Mac
+#   where `muse login` kept it in the keychain instead, list muse in
+#   show_providers and press Allow in its usage panel rather than setting this.
+#   Dashboard LLM_ keys and LLM| inference keys are not accepted.
 # token = ""
 #
 # CodeRabbit (coderabbit)

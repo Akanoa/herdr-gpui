@@ -313,7 +313,8 @@ fn sidebar_densities_keep_details_and_badges_within_their_rows(cx: &mut gpui::Te
                 let badge = cx.debug_bounds("pr-sidebar-child").unwrap();
                 assert_eq!(badge.right(), row.right() - px(padding));
                 assert!(badge.bottom() <= row.bottom());
-                assert!(cx.debug_bounds("name-sidebar-child").unwrap().right() <= badge.left());
+                let first = cx.debug_bounds("badge-line-sidebar-child").unwrap();
+                assert!(cx.debug_bounds("name-sidebar-child").unwrap().right() <= first.left());
                 assert!(cx.debug_bounds("dirty-sidebar-child").is_some());
                 // Debug bounds outlive the element that recorded them, so a
                 // rounded frame cannot prove tree lines absent here; see

@@ -50,6 +50,13 @@ pub enum Error {
         #[source]
         source: herdr_client::Error,
     },
+    /// Reading a local repository with gix.
+    #[error("{operation} failed: {source}")]
+    Git {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("{operation} returned unexpected output")]
     Output { operation: &'static str },
     #[error("{operation} returned invalid JSON: {source}")]

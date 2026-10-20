@@ -106,7 +106,7 @@ impl Policy {
         now: Instant,
         mut emit: impl FnMut(SemanticNotification),
     ) {
-        let snapshot = live.snapshot.as_deref();
+        let snapshot = live.latest_snapshot().map(Arc::as_ref);
         for mut pending in std::mem::take(&mut self.pending) {
             if pending.deadline > now {
                 self.pending.push_back(pending);

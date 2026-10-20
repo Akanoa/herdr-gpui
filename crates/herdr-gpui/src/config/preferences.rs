@@ -13,10 +13,14 @@ pub(crate) enum Preference {
     ShowNetworkQuality(bool),
     AgentCheckpoints(bool),
     ShowListeningPorts(bool),
+    ShowAgentsHeader(bool),
     ShowSidebarSearch(bool),
     ShowRepositoryIcons(bool),
-    /// `status_icons`; `None` removes it, following Herdr's indicator style.
-    StatusIcons(Option<StatusIcons>),
+    ShowWindowControls(bool),
+    /// `status_icons`: the set agent status is drawn with.
+    StatusIcons(StatusIcons),
+    /// `edge_rail`: the bar on busy and finished rows.
+    EdgeRail(bool),
     ShowDeviceIcons(bool),
     SmoothScroll(bool),
     FocusFollowsMouse(bool),
@@ -44,8 +48,12 @@ pub(crate) enum Preference {
     SidebarRowGap(Option<f32>),
     SidebarHostGap(Option<f32>),
     SidebarSelect(SelectMode),
+    /// `[sidebar] activity_bar`: whether the icon column leads the window.
+    SidebarActivityBar(bool),
     /// `[sidebar] device_footer`: when the sidebar draws its device footer.
     SidebarDeviceFooter(DeviceFooter),
+    /// `[sidebar] change_counts`: whose line counts a worktree row shows.
+    SidebarChangeCounts(ChangeCounts),
     /// `None` removes the host's colour.
     HostColor {
         host: String,
@@ -114,6 +122,9 @@ impl Config {
                 Preference::ShowListeningPorts(value) => {
                     (None, "show_listening_ports", Some(value.into()))
                 }
+                Preference::ShowAgentsHeader(value) => {
+                    (None, "show_agents_header", Some(value.into()))
+                }
                 Preference::ShowSidebarSearch(value) => {
                     (None, "show_sidebar_search", Some(value.into()))
                 }
@@ -123,12 +134,14 @@ impl Config {
                 Preference::ShowDeviceIcons(value) => {
                     (None, "show_device_icons", Some(value.into()))
                 }
+                Preference::ShowWindowControls(value) => {
+                    (None, "show_window_controls", Some(value.into()))
+                }
                 Preference::SmoothScroll(value) => (None, "smooth_scroll", Some(value.into())),
-                Preference::StatusIcons(value) => (
-                    None,
-                    "status_icons",
-                    value.map(|icons| icons.as_str().into()),
-                ),
+                Preference::StatusIcons(value) => {
+                    (None, "status_icons", Some(value.as_str().into()))
+                }
+                Preference::EdgeRail(value) => (None, "edge_rail", Some(value.into())),
                 Preference::FocusFollowsMouse(value) => {
                     (None, "focus_follows_mouse", Some(value.into()))
                 }
@@ -190,10 +203,18 @@ impl Config {
                         SelectMode::GroupDim => "group-dim",
                     })),
                 ),
+                Preference::SidebarActivityBar(value) => {
+                    (Some("sidebar"), "activity_bar", Some(value.into()))
+                }
                 Preference::SidebarDeviceFooter(footer) => (
                     Some("sidebar"),
                     "device_footer",
                     Some(toml_edit::Value::from(footer.as_str())),
+                ),
+                Preference::SidebarChangeCounts(counts) => (
+                    Some("sidebar"),
+                    "change_counts",
+                    Some(toml_edit::Value::from(counts.as_str())),
                 ),
                 Preference::HostColor { host, color } => {
                     if let Some(color) = color.filter(|color| *color > 0xFF_FFFF) {

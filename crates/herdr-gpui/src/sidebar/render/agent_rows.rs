@@ -5,7 +5,7 @@ use crate::{
     HerdrWindow, NavigationTarget,
     sidebar::{
         Indicators, agent_name,
-        agents::{agent_place, state_label, status_text},
+        agents::{agent_place, pane_name, state_label, status_text},
         cell::{AgentRow, Cell, RowContext, RowData, layout_for},
         layout::SidebarLook,
         line_height, tokens, wash,
@@ -132,20 +132,32 @@ impl HerdrWindow {
         let menu_endpoint = endpoint_id.clone();
         let menu_pane = id.clone();
         let menu_open = selected && self.pane_menu_target() == Some(id.as_str());
+        let name = agent_name(agent);
+        let pane = pane_name(agent, snapshot, name);
+        let place = (!nested).then(|| agent_place(agent, snapshot)).flatten();
+        let state = state_label(agent, status_text(agent.agent_status));
+        let spoken = crate::sidebar::accessibility::agent_name(
+            name,
+            pane.as_deref(),
+            &state,
+            place,
+            row_cx.host,
+        );
         Cell::new(
             rows,
             RowData::Agent(AgentRow {
                 key: format!("agent-{id}"),
-                name: agent_name(agent),
+                name,
                 icon: crate::icons::AgentIcon::from_identity(agent.agent.as_deref()),
                 status: agent.agent_status,
-                place: (!nested).then(|| agent_place(agent, snapshot)).flatten(),
+                place,
+                pane,
                 status_text: self
                     .config
                     .sidebar_layout
                     .agents
                     .shows_status_text(agent.agent.as_deref())
-                    .then(|| state_label(agent, status_text(agent.agent_status))),
+                    .then_some(state),
                 lines,
             }),
             row_cx,
@@ -155,6 +167,10 @@ impl HerdrWindow {
         .row()
         .when(gap > 0., |row| row.mt(px(gap)))
         .id(SharedString::from(format!("agent-{endpoint_id}-{id}")))
+        .role(Role::ListItem)
+        .aria_label(spoken)
+        .aria_selected(selected && agent.focused)
+        .map(|control| self.chrome_stop(crate::window::chrome_focus::Region::Sidebar, control))
         .when(multi, |row| {
             row.debug_selector(|| format!("agent-{endpoint_id}-{id}"))
         })

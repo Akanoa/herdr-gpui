@@ -62,6 +62,9 @@ impl HerdrWindow {
     pub(crate) fn update_git(&mut self) -> bool {
         let now = std::time::Instant::now();
         let mut changed = self.git.track(self.git_input(), self.active, now);
+        self.git.set_counted(
+            self.config.sidebar_style.change_counts == crate::config::ChangeCounts::Local,
+        );
         self.git
             .track_listed(self.listed_git_inputs(), self.active, now);
         changed |= self.git.poll(now);

@@ -17,7 +17,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Helpers defined once per remote session. `herdr_field` prints the string
 /// or number at a JSON path from stdin. A real parser is required: matching
 /// only the last key can select another provider's credentials.
-const PRELUDE: &str = r#"PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+const PRELUDE: &str = r#"PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:$PATH"
 export PATH
 herdr_field() {
     if command -v python3 >/dev/null 2>&1; then
@@ -62,7 +62,6 @@ impl Drop for Shell {
 }
 
 impl Shell {
-    #[cfg(unix)]
     pub fn connect(target: &str) -> Result<Self> {
         let mut command = herdr_client::script_command(target, "exec /bin/sh -s")?;
         command
@@ -70,11 +69,6 @@ impl Shell {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         Self::start(command)
-    }
-
-    #[cfg(windows)]
-    pub fn connect(_target: &str) -> Result<Self> {
-        Err(Error::UsageUnsupported)
     }
 
     /// `/bin/sh` inside a WSL distribution, through `wsl.exe`.

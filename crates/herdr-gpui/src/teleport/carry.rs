@@ -3,7 +3,8 @@
 //! into an existing space of it that is clean and can fast-forward to them;
 //! the pane's agent session moves with them and resumes, and the source pane
 //! closes. Unlike a teleport, the source checkout and the rest of its
-//! workspace stay as they are.
+//! workspace stay as they are. Outside a repository, only the agent session
+//! moves, into an existing home-relative directory on the destination.
 
 use super::{
     error::{Error, Step},
@@ -28,34 +29,22 @@ pub(crate) struct Origin {
     pub(crate) place: Place,
     pub(crate) workspace_id: String,
     pub(crate) pane_id: String,
-    /// The repository's Git common directory on the source host.
-    pub(crate) repo_key: String,
-    pub(crate) repo_label: String,
 }
 
-impl Origin {
-    fn source(&self) -> Source {
-        Source {
-            place: self.place.clone(),
-            workspace_id: self.workspace_id.clone(),
-            custom_label: None,
-            repo_key: self.repo_key.clone(),
-            repo_label: self.repo_label.clone(),
-            // The work is copied, so there is no checkout to take back.
-            branch: None,
-            tab_labels: HashMap::new(),
-        }
-    }
-}
+mod session;
+pub(crate) use session::{SessionReview, check_session};
 
 /// Where on the destination the user chose to put the pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Choice {
+    // keep-sorted start
     NewWorktree,
+    SessionOnly,
     /// An open workspace of the repository.
     Space {
         workspace_id: String,
     },
+    // keep-sorted end
 }
 
 /// How the work lands, as the review found it can.
@@ -78,7 +67,7 @@ pub(crate) enum Landing {
 
 /// What the move will do, for the user to confirm.
 #[derive(Debug, Clone)]
-pub(crate) struct Review {
+pub(crate) struct RepositoryReview {
     pub(crate) destination: Place,
     /// The destination's matching repository, which the worktree joins.
     pub(crate) repository: Repository,
@@ -91,7 +80,15 @@ pub(crate) struct Review {
     pub(crate) action: Action,
 }
 
-impl Review {
+#[derive(Debug, Clone)]
+pub(crate) enum Review {
+    // keep-sorted start
+    Repository(Box<RepositoryReview>),
+    SessionOnly(Box<SessionReview>),
+    // keep-sorted end
+}
+
+impl RepositoryReview {
     /// What the destination pane will run, as the review lists it.
     pub(crate) fn describe(&self) -> String {
         super::ui::describe(&self.work, &self.action)
@@ -115,6 +112,22 @@ pub(crate) fn review(
     choice: &Choice,
     cancelled: &AtomicBool,
 ) -> Result<Review> {
+    match choice {
+        Choice::SessionOnly => session::review(origin, &destination.place, cancelled)
+            .map(|review| Review::SessionOnly(Box::new(review))),
+        Choice::NewWorktree | Choice::Space { .. } => {
+            review_repository(origin, destination, choice, cancelled)
+                .map(|review| Review::Repository(Box::new(review)))
+        }
+    }
+}
+
+fn review_repository(
+    origin: &Origin,
+    destination: &HostRepositories,
+    choice: &Choice,
+    cancelled: &AtomicBool,
+) -> Result<RepositoryReview> {
     let from = &origin.place.host;
     let to = &destination.place.host;
     let snapshot: SnapshotResult = from.herdr(Step::Review, &["api", "snapshot"], cancelled)?;
@@ -128,6 +141,7 @@ pub(crate) fn review(
     // one a device with several clones would otherwise be matched by.
     let space = match choice {
         Choice::NewWorktree => None,
+        Choice::SessionOnly => return Err(Error::SessionRequired),
         Choice::Space { workspace_id } => Some(open_space(destination, workspace_id, cancelled)?),
     };
     let narrowed;
@@ -146,7 +160,16 @@ pub(crate) fn review(
         }
         None => destination,
     };
-    let candidate = job::resolve(&origin.source(), hosts, cancelled)?;
+    let source = Source {
+        place: origin.place.clone(),
+        workspace_id: origin.workspace_id.clone(),
+        custom_label: None,
+        repo_key: worktree.repo_key.clone(),
+        repo_label: worktree.repo_name.clone(),
+        branch: None,
+        tab_labels: HashMap::new(),
+    };
+    let candidate = job::resolve(&source, hosts, cancelled)?;
     // Only a repository sharing a remote is the same project; a name alone
     // could be anything.
     let repository = match candidate.destination {
@@ -195,7 +218,7 @@ pub(crate) fn review(
     programs.dedup();
     let installed = to.installed(Step::Review, &programs, cancelled)?;
     let action = plan::plan_action(&work, &installed, || handoff_path(0));
-    Ok(Review {
+    Ok(RepositoryReview {
         destination: destination.place.clone(),
         repository,
         checkout,
@@ -301,6 +324,18 @@ fn space_landing(
 pub(crate) fn run(
     origin: &Origin,
     review: &Review,
+    mut report: impl FnMut(Step),
+    cancelled: &AtomicBool,
+) -> Result<Carried> {
+    match review {
+        Review::Repository(review) => run_repository(origin, review, report, cancelled),
+        Review::SessionOnly(review) => session::run(origin, review, &mut report, cancelled),
+    }
+}
+
+fn run_repository(
+    origin: &Origin,
+    review: &RepositoryReview,
     mut report: impl FnMut(Step),
     cancelled: &AtomicBool,
 ) -> Result<Carried> {
@@ -412,14 +447,7 @@ pub(crate) fn run(
 
     // The work runs on the destination now; a source pane that will not
     // close is only worth a warning.
-    report(Step::Retire);
-    if let Err(error) = from.herdr_ok(
-        Step::Retire,
-        &["pane", "close", &origin.pane_id],
-        &AtomicBool::new(false),
-    ) {
-        warnings.push(format!("The source pane stayed open: {error}"));
-    }
+    retire(origin, &mut warnings, &mut report);
 
     Ok(Carried {
         endpoint_id: review.destination.endpoint_id.clone(),
@@ -429,11 +457,22 @@ pub(crate) fn run(
     })
 }
 
+fn retire(origin: &Origin, warnings: &mut Vec<String>, report: &mut impl FnMut(Step)) {
+    report(Step::Retire);
+    if let Err(error) = origin.place.host.herdr_ok(
+        Step::Retire,
+        &["pane", "close", &origin.pane_id],
+        &AtomicBool::new(false),
+    ) {
+        warnings.push(format!("The source pane stayed open: {error}"));
+    }
+}
+
 /// Land the work in a new worktree and start the pane's program in its first
 /// pane. Until the program starts, the worktree holds nothing but the copied
 /// work, so a failure removes it again. Returns its workspace and pane.
 fn into_worktree(
-    review: &Review,
+    review: &RepositoryReview,
     branch: Option<&str>,
     from: &super::Host,
     reference: &str,
@@ -481,7 +520,7 @@ struct Space<'a> {
 /// start; the tab made for it closes. Returns the workspace and pane.
 #[allow(clippy::too_many_arguments)]
 fn into_space(
-    review: &Review,
+    review: &RepositoryReview,
     from: &super::Host,
     space: &Space<'_>,
     reference: &str,
@@ -536,7 +575,7 @@ fn into_space(
 /// Move the agent's session when there is one, and run the pane's program in
 /// `pane`, a fresh shell in `path`, from the pane's own subdirectory.
 fn launch(
-    review: &Review,
+    review: &RepositoryReview,
     from: &super::Host,
     path: &str,
     pane: &str,
@@ -570,7 +609,7 @@ fn launch(
 /// branch when the destination can take it, else on a branch the daemon
 /// names.
 fn create_worktree(
-    review: &Review,
+    review: &RepositoryReview,
     branch: Option<&str>,
     reference: &str,
     report: &mut impl FnMut(Step),
@@ -609,7 +648,7 @@ fn create_worktree(
 /// What the destination pane runs, after moving the agent's session when it
 /// has one.
 fn destination_argv(
-    review: &Review,
+    review: &RepositoryReview,
     from: &super::Host,
     path: &str,
     warnings: &mut Vec<String>,
@@ -640,14 +679,16 @@ fn destination_argv(
                 to: path,
                 cwd: &cwd,
             };
-            Some(match move_session(*agent, session, &route, cancelled) {
-                Ok(reference) => agent.resume_argv(&reference, flags),
-                Err(Error::Cancelled) => return Err(Error::Cancelled),
-                Err(error) => {
-                    warnings.push(format!("{} started afresh: {error}", agent.binary()));
-                    agent.start_argv(None)
-                }
-            })
+            Some(
+                match resume_session(*agent, session, flags, &route, cancelled) {
+                    Ok(argv) => argv,
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    Err(error) => {
+                        warnings.push(format!("{} started afresh: {error}", agent.binary()));
+                        agent.start_argv(None)
+                    }
+                },
+            )
         }
         Action::Handoff { note, to: agent } => {
             let note = format!("{path}/{note}");
@@ -657,11 +698,22 @@ fn destination_argv(
     })
 }
 
+fn resume_session(
+    agent: AgentKind,
+    session: &super::snapshot::AgentSession,
+    flags: &[String],
+    route: &Route<'_>,
+    cancelled: &AtomicBool,
+) -> Result<Vec<String>> {
+    let reference = move_session(agent, session, route, cancelled)?;
+    Ok(agent.resume_argv(&reference, flags))
+}
+
 /// A review of an idle shell into a new worktree on `destination`, for
 /// window tests that need a move ready to start.
 #[cfg(test)]
 pub(crate) fn shell_review(destination: Place) -> Review {
-    Review {
+    Review::Repository(Box::new(RepositoryReview {
         destination,
         repository: Repository {
             key: "/repo/.git".into(),
@@ -674,7 +726,7 @@ pub(crate) fn shell_review(destination: Place) -> Review {
         cwd: None,
         work: Work::Shell,
         action: Action::Shell,
-    }
+    }))
 }
 
 // Host scripts need /bin/sh; carrying is not offered on other clients.

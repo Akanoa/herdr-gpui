@@ -9,6 +9,9 @@ mod credential_manager;
 mod credentials;
 mod device;
 mod http;
+mod installation;
+#[cfg(test)]
+pub(crate) use http::fake_graphql;
 mod log;
 mod routing;
 #[cfg(target_os = "linux")]
@@ -27,12 +30,18 @@ mod tests;
 pub(crate) use {
     auth::Auth,
     device::{Profile, Source, VERIFY_URL},
-    http::{graphql, graphql_aliases, hidden_hint, mutation},
+    http::{graphql, graphql_aliases, hidden_hint, mutation, rest},
+    installation::{Access, Installation},
     routing::Tokens,
     store::{Account, Note, Store},
 };
 // Cloud providers keep their own secrets in the same store.
-#[cfg(any(feature = "boat", feature = "coder", feature = "daytona"))]
+#[cfg(any(
+    feature = "azure",
+    feature = "boat",
+    feature = "coder",
+    feature = "daytona"
+))]
 pub(crate) use store::{Entry, read_entry, save_entry};
 
 use crate::Result;

@@ -3,9 +3,9 @@
 `herdr-gpui` is also a command line for the running Herdr UI. Herdr's own
 `herdr` CLI drives the daemon: workspaces, terminal tabs, panes, agents,
 worktrees, and notifications. `herdr-gpui COMMAND` covers what only this
-client knows or draws: its windows, its own tabs (pages, code, reviews, the
-orchestrator, Devices), worktree notes, checkpoints, forwarded ports, and its
-settings.
+client knows or draws: its windows, its own tabs (pages, code, reviews,
+Devices), the activity bar's sections, worktree notes, checkpoints, forwarded
+ports, and its settings.
 
 Commands reach the app over a socket of its own,
 `$XDG_STATE_HOME/herdr/gpui/control.sock` (default `~/.local/state/`), which
@@ -16,6 +16,7 @@ the app's shim at `~/.local/state/herdr/gpui/bin/herdr-gpui` offers
 [remote agents](../crates/herdr-gpui/README.md#letting-agents-open-pages)),
 and every other command exits 8. A few commands work from files alone and
 need no running app; they say so below.
+
 On Windows, `herdr-gpui.exe` is a console program, so a shell waits for it and
 sees its exit code; the installers put its directory on `PATH`. The Start menu
 opens `herdr-gpui-launcher.exe` instead, which starts it without a console
@@ -67,25 +68,44 @@ Every command accepts:
 | `window detach\|reconnect` | Detach from, or reconnect to, the selected host |
 | `ui sidebar\|statusbar [on\|off\|toggle]` | For this window and session |
 | `ui font-size +\|-\|reset\|POINTS` | The terminal font size for this session |
+| `ui panel workspaces\|overview\|pull-requests\|issues\|security\|usage` | Show an activity bar section: Workspaces with the sidebar expanded, Overview of what needs you on every host, the focused workspace's pull requests or issues across the window, the vulnerability reports and Dependabot alerts of your repositories, or every host's plan usage |
 | `run COMMAND` | Any app command by its `[keybindings]` name, as the palette runs it |
 | `commands` | The names `run` accepts (no app needed) |
+| `open DIR` | Open a folder as **Open Project** in the palette does, starting the app if needed (below) |
+
+`open DIR` checks the folder where you run it and resolves it to an absolute,
+canonical path. A path that does not exist exits 5; a file, or a folder in a
+device namespace (`\\.\…`, `\\?\GLOBALROOT\…`, and on Unix `/dev`, `/proc`,
+`/sys`), exits 1. The app then opens the command palette on
+its projects and opens the folder there, which focuses the workspace already
+rooted in it or starts one, on the window's local Herdr, and brings the window
+forward. A dialog open in the window refuses it (exit 6); the palette shows
+anything that goes wrong after that, such as the folder disappearing.
+
+When no Herdr UI is running and no `--window` is given, `open` starts the app,
+as a plain `herdr-gpui` would, then asks again every quarter second until the
+window has connected to the local Herdr and accepts the folder. It waits at
+most 20 seconds after starting the app, then exits 7. Explorer's **Open in
+Herdr UI** entry, which both Windows installers add, runs this command through
+`herdr-gpui-launcher.exe`, so no console window appears.
 
 ### The app's own tabs
 
 | Command | What it does |
 | --- | --- |
-| `tab [list]` | Pages, code, reviews, the orchestrator, and Devices tabs with IDs |
+| `tab [list]` | Pages, code, reviews, and Devices tabs with IDs |
 | `tab focus\|close ID` | |
 | `browser open\|reload\|feedback` | See [browser tabs](../crates/herdr-gpui/README.md#browser-tabs) |
 | `browser list` | Page tabs only |
 | `browser navigate ID URL` | Load another address in a page tab |
 | `browser back\|forward ID` | |
+| `browser zoom ID +\|-\|reset\|PERCENT` | Zoom a page tab a step, back to 100%, or to 50-300%; the tab keeps it |
 | `browser text ID` | The page's visible text |
 | `browser screenshot ID PATH` | A PNG of the visible page, at most 2000 px a side (macOS) |
 | `code open FILE[:LINE]` | A read-only code tab at a line |
 | `code edit FILE[:LINE]` | Your terminal editor, in a new pane beside yours |
 | `devices` | The Devices overview |
-| `orchestrator [--repo PATH]` | The orchestrator of your checkout, or of PATH |
+| `orchestrator [--repo PATH]` | Show the Issues section narrowed to your checkout's project, or PATH's |
 | `orchestrator items\|issues\|prs` | What it last synced, from its local database (no app needed) |
 | `review` | The review of your workspace's uncommitted changes |
 
@@ -115,6 +135,8 @@ Every command accepts:
 | `ports forward\|unforward PORT` | Forward a port of the SSH host to this machine |
 | `ports open PORT` | `localhost:PORT` in a tab, forwarded first when remote |
 | `usage`, `system` | Plan usage and load of the selected host |
+| `security` | Private vulnerability reports in triage (titles and metadata only, never their descriptions) and open Dependabot alerts of the github.com repositories the window's workspaces hold, most severe first, as the Security section last read them. Exits 4 when there are none |
+| `security open REPOSITORY ALERT\|GHSA` | Show alert `ALERT` (its number) or private report `GHSA` (its GHSA ID) of `REPOSITORY` (`owner/name`) in the Security section, beside its list: the fix, the advisory, and the dependency for an alert; the report, its advisory draft, and its conversation for a report. Only items the section lists open; nothing on GitHub changes |
 | `cloud [list]` | Saved cloud machines (no app needed) |
 | `cloud add` | Open the settings that add one |
 | `cloud setup ID` | Run the `[cloud]` setup script on a saved machine again, in a new tab once the window shows it. `ID` is the machine ID from `cloud list`, its host ID, or its label |
@@ -138,7 +160,7 @@ Every command accepts:
 | `integrations [list]` | What Herdr offers the selected host |
 | `integrations install-skill` | Install the agent skill (no app needed) |
 | `logs [--lines N] [--path]` | The app's log (no app needed) |
-| `diagnostics bundle PATH` | A redacted report for a bug (no app needed) |
+| `diagnostics bundle PATH` | A redacted report for a bug, with the newest crash reports (no app needed) |
 
 Boat's sandbox lifetime uses the existing config commands:
 
@@ -205,6 +227,26 @@ Scrollback search is not repeated here: `herdr pane read` covers it. Moving a
 window, capturing a whole window, and destroying a cloud machine have no
 command because the app cannot do them.
 
+## Links
+
+`herdr-gpui URL`, with a `herdr-gpui://` link as the only argument, hands the
+link to the running app, or starts the app and follows it once it is
+connected. On Windows the installer registers the scheme, so the shell runs
+this for jump list entries, notification clicks, and links in other apps.
+
+| Link | What the app does |
+| --- | --- |
+| `herdr-gpui://open?path=PATH` | Focus the workspace showing the Git checkout or worktree at `PATH`, or ask in the window before opening one there |
+| `herdr-gpui://device?id=ID` | Show the device `host list` names `ID` |
+| `herdr-gpui://notification?tag=TAG` | Open the pane of a notification this app posted |
+
+A link is untrusted input, checked by the command and again by the app: only
+those shapes, each parameter once, bounded lengths, no control characters, and
+an absolute local path without `..` (on Windows a drive path, never a UNC or
+`\\?\` one). A link only ever shows something; it never runs a command. A
+refused link exits 2, an unknown device or notification 5, as for commands.
+The request is `{"method": "link", "caller", "op": {"url"}}`.
+
 ## The protocol
 
 One JSON request line, one JSON response line, then the socket closes. A
@@ -212,7 +254,7 @@ request is `{"method", "caller", "op"}`, where `caller` carries the pane,
 workspace, daemon socket, and window, and `op` is tagged with `"op"`. Browser
 requests keep their original flat form (`browser.open`, `browser.reload`,
 `browser.feedback`, `notes.send`). `status` reports the protocol version,
-currently 2. Requests and responses are bounded to 256 KiB, a request that
+currently 4. Requests and responses are bounded to 256 KiB, a request that
 waits says for how long (at most 600 seconds), and the app answers at most a
 few requests at a time.
 

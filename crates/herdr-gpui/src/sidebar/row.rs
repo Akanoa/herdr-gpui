@@ -21,7 +21,7 @@ mod badge;
 mod configured;
 
 pub(crate) use badge::compact;
-pub(super) use badge::{PrBadge, RowBadge, Upstream};
+pub(super) use badge::{Counts, PrBadge, RowBadge, Upstream};
 use configured::configured_lines;
 pub(crate) use configured::styled;
 pub(super) use configured::{
@@ -29,11 +29,13 @@ pub(super) use configured::{
 };
 
 /// What a row shows in its leading icon slot: a repository owner's avatar when
-/// one is cached, the GitHub mark while it is not, and nothing for a row that
-/// reserves no slot at all: a child row, or any row while the repository
-/// icons are turned off.
+/// one is cached, the GitHub mark while it is not, an empty slot for a folder
+/// that is not a Git checkout, so its name lines up with the rows around it,
+/// and nothing for a row that reserves no slot at all: a child row, or any
+/// row while the repository icons are turned off.
 pub(super) enum RowIcon {
     None,
+    Blank,
     Mark,
     Avatar(Arc<Image>),
 }
@@ -55,7 +57,7 @@ impl RowIcon {
     /// avatar still loading or failing to decode shows the mark instead.
     pub(super) fn element(self, color: u32) -> AnyElement {
         match self {
-            Self::None => Empty.into_any_element(),
+            Self::None | Self::Blank => Empty.into_any_element(),
             Self::Mark => github_mark(color).size_full().into_any_element(),
             Self::Avatar(image) => img(image)
                 .size_full()
@@ -391,8 +393,13 @@ pub(super) fn row(
     // leave none, and then no lines are drawn rather than a box of negative width.
     let tree_width = padding + indent - cx.nest - layout.tree_gutter() - extra_status_width;
     let draw_tree = tree != RowTree::None && look.density.tree_lines && tree_width > 0.;
-    let arrow_reserve = if reserve_arrow { ARROW_RESERVE } else { 0. };
-    let arrow_absent = arrow.is_none();
+    // Only a drawn chevron takes its column. The badge hugs the row's edge
+    // either way, so an empty column would only cut a group member's name.
+    let arrow_reserve = if reserve_arrow && arrow.is_some() {
+        ARROW_RESERVE
+    } else {
+        0.
+    };
     let status_gutter = if show_status { status_width + gap } else { 0. };
     let available = (look.content_width(width) - status_gutter - indent - arrow_reserve).max(0.);
     // Narrow sidebars and large fonts can leave less room than a badge needs.
@@ -400,8 +407,20 @@ pub(super) fn row(
     let badge_width = badge.as_ref().map_or(0., |badge| {
         badge.width(font, &layout).min((available - gap).max(0.))
     });
+    // The label's first line yields only the badge's first line; the counts
+    // under it take their room from the second line. A fold chevron is a
+    // click target as tall as the row, so beside one the label still yields
+    // the whole column.
+    let hanging = badge.as_ref().filter(|_| arrow.is_none());
+    let badge_first = hanging.map_or(badge_width, |badge| {
+        badge.first_width(font, &layout).min(badge_width)
+    });
+    let counts_reserve = hanging
+        .map(|badge| badge.counts_width(font, &layout).min(badge_width))
+        .filter(|width| *width > 0.)
+        .map_or(0., |width| width + gap);
     let pr_reserve = if badge.is_some() {
-        badge_width + gap
+        badge_first + gap
     } else {
         0.
     };
@@ -438,6 +457,7 @@ pub(super) fn row(
         0.
     };
     let label_width = (available - pr_reserve - status_reserve - upstream_reserve).max(0.);
+    let detail_limit = label_width.min((available - counts_reserve).max(0.));
     let agent_icon = match kind {
         RowKind::Agent(icon) => Some(icon),
         RowKind::Workspace => None,
@@ -471,8 +491,7 @@ pub(super) fn row(
         .gap(px(gap))
         .py(px(content_top))
         .cursor_pointer()
-        .map(|row| cx.mark.apply(row, key, &look))
-        .map(|row| look.mark(row, key, state, theme))
+        .map(|row| look.mark(row, key, (state, cx.mark), theme))
         // Tree lines run in the indent the row already reserves, so a child is
         // tied to its parent without box-drawing glyphs in the label.
         .when(draw_tree, |row| {
@@ -547,7 +566,7 @@ pub(super) fn row(
                                 focused,
                                 teleported,
                             },
-                            label_width,
+                            (label_width, detail_limit),
                             workspace_icon,
                             cx,
                         );
@@ -561,9 +580,10 @@ pub(super) fn row(
                                 .when_some(agent_first, |line, icon| {
                                     line.child(agent_mark(key, icon, agent_size, name_color, font))
                                 })
-                                .when(!matches!(workspace_icon, RowIcon::None), |title| {
-                                    title.child(workspace_icon.slot(key, font, muted))
-                                })
+                                .when(
+                                    matches!(workspace_icon, RowIcon::Mark | RowIcon::Avatar(_)),
+                                    |title| title.child(workspace_icon.slot(key, font, muted)),
+                                )
                                 .child(
                                     name_line(
                                         name,
@@ -577,8 +597,8 @@ pub(super) fn row(
                         )
                         .when(show_detail, |column| {
                             let detail_x =
-                                agent_detail.map_or(0., |_| agent_reserve.min(label_width));
-                            let room = (label_width - detail_x).max(0.);
+                                agent_detail.map_or(0., |_| agent_reserve.min(detail_limit));
+                            let room = (detail_limit - detail_x).max(0.);
                             // The counts follow the branch and win the room it would
                             // take, so a long branch ellipsizes before they do.
                             let (detail_width, upstream_x) = match upstream_inline {
@@ -594,7 +614,7 @@ pub(super) fn row(
                             column.child(
                                 div()
                                     .relative()
-                                    .w(px(label_width))
+                                    .w(px(detail_limit))
                                     .h(px(line_height(font)))
                                     .when_some(agent_detail, |line, icon| {
                                         line.child(agent_mark(
@@ -655,16 +675,17 @@ pub(super) fn row(
                     .child(upstream.element(key, glyph, theme)),
             )
         })
-        // The collapse column comes first so the badge can hug the row's edge;
-        // a reserved-but-empty column keeps every badge on the same right edge.
+        // The collapse column comes first so the badge can hug the row's edge.
         .when_some(arrow, |row, arrow| row.child(arrow))
-        .when(arrow_absent && reserve_arrow, |row| {
-            // The row's gap already covers part of the reserve; a wide gap
-            // covers all of it.
-            row.child(div().w(px((ARROW_RESERVE - gap).max(0.))).flex_none())
-        })
         .when_some(badge, |row, badge| {
-            row.child(badge.element(key, badge_width, font, theme, &layout))
+            let element = badge.element(key, badge_width, font, theme, &layout);
+            if badge_first >= badge_width {
+                return row.child(element);
+            }
+            // Only the first line holds its place in the flow; the wider counts
+            // line hangs at the row's edge, beside the shortened detail line.
+            row.child(div().w(px(badge_first)).flex_none())
+                .child(element.absolute().top(px(content_top)).right(px(content_x)))
         })
 }
 

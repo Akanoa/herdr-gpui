@@ -8,6 +8,7 @@ pub(crate) use tabs::{Ends, strip_height};
 
 pub(crate) use decorations::controls;
 pub(crate) use decorations::frame;
+pub(crate) use decorations::show_controls;
 
 use crate::{HerdrWindow, fonts::StyledFont, menu::Page};
 use gpui::{prelude::*, *};
@@ -15,6 +16,8 @@ use gpui::{prelude::*, *};
 /// Avatar or signed-out GitHub icon. Smaller than the hit target, which stays a
 /// comfortable size for the pointer.
 const AVATAR: f32 = 20.;
+/// The dot an account waiting on GitHub App approval puts on the avatar.
+const ATTENTION_DOT: f32 = 10.;
 
 const SIDEBAR_TOGGLE_SIZE: f32 = 28.;
 const SIDEBAR_GLYPH_WIDTH: f32 = 18.;
@@ -219,15 +222,21 @@ impl HerdrWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        // The toggle leads the bar so it stays put whether or not the sidebar
-        // below it is showing, and can always bring the sidebar back. Back
-        // and Forward follow it, as in Finder and Files.
+        // Without the activity bar, the toggle leads the bar so it stays put
+        // whether or not the sidebar below it is showing, and can always
+        // bring the sidebar back. The bar keeps it in the left column instead,
+        // which never leaves the screen. Back and Forward follow, as in
+        // Finder and Files.
+        let toggle = !self.activity_bar_leads();
         let leading = div()
             .flex()
             .flex_none()
             .items_center()
             .h_full()
-            .child(self.sidebar_toggle(cx))
+            .when(toggle, |leading| leading.child(self.sidebar_toggle(cx)))
+            // No toggle precedes Back here, so its inset is not there to
+            // complete the room before it.
+            .when(!toggle, |leading| leading.pl(px(SIDEBAR_TOGGLE_INSET)))
             .when(
                 f32::from(window.viewport_size().width) >= NAVIGATION_MIN_WIDTH,
                 |leading| leading.child(self.navigation(cx)),
@@ -251,10 +260,14 @@ impl HerdrWindow {
         .child(self.titlebar_end(window, cx))
     }
 
-    fn sidebar_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn sidebar_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("toggle-sidebar")
             .debug_selector(|| "toggle-sidebar".into())
+            .role(Role::Button)
+            .aria_label("Sidebar")
+            .aria_expanded(self.sidebar_visible)
+            .map(|control| self.chrome_stop(crate::window::chrome_focus::Region::TitleBar, control))
             .flex_none()
             .self_center()
             .size(px(SIDEBAR_TOGGLE_SIZE))
@@ -277,6 +290,7 @@ impl HerdrWindow {
     /// a client-decorated window draws.
     fn titlebar_end(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let image = self.pr_profile().and_then(|p| p.avatar.clone());
+        let attention = self.github_needs_attention();
         div()
             .flex()
             .flex_none()
@@ -294,11 +308,24 @@ impl HerdrWindow {
                     .child(
                         div()
                             .id("titlebar-avatar")
+                            .role(Role::Button)
+                            .aria_label(if attention {
+                                "GitHub account, needs attention"
+                            } else {
+                                "GitHub account"
+                            })
+                            .map(|control| {
+                                self.chrome_stop(
+                                    crate::window::chrome_focus::Region::TitleBar,
+                                    control,
+                                )
+                            })
                             .group("titlebar-account")
                             .debug_selector(|| "titlebar-avatar".into())
                             .flex()
                             .items_center()
                             .justify_center()
+                            .relative()
                             .size(px(28.))
                             .rounded_full()
                             .cursor_pointer()
@@ -342,12 +369,29 @@ impl HerdrWindow {
                                                 .text_color(rgb(self.theme.foreground)),
                                         ),
                                     }),
-                            ),
+                            )
+                            // On the avatar's upper right, inside the hit
+                            // target, ringed in the bar's color to stand off
+                            // any avatar.
+                            .when(attention, |control| {
+                                control.child(
+                                    div()
+                                        .debug_selector(|| "titlebar-avatar-attention".into())
+                                        .absolute()
+                                        .top(px(3.))
+                                        .right(px(3.))
+                                        .size(px(ATTENTION_DOT))
+                                        .rounded_full()
+                                        .border_2()
+                                        .border_color(bar(self.theme.surface))
+                                        .bg(rgb(self.theme.ink(self.theme.palette[1]))),
+                                )
+                            }),
                     ),
             )
             // The in-window menu bar carries the window controls instead.
             .when(!crate::menus::IN_WINDOW, |end| {
-                end.children(controls(window, &self.theme, |window, _| {
+                end.children(controls(false, window, &self.theme, |window, _| {
                     window.remove_window();
                 }))
             })
@@ -385,10 +429,21 @@ pub(super) fn render(
 /// macOS windows own titlebar dragging (`app_owns_titlebar_drag`), so AppKit
 /// never moves the window from under a tab, and a client-decorated window has
 /// nothing else to move it. A server-drawn frame moves the window from its own
-/// title bar, so there `area` is left alone.
+/// title bar, so there `area` is left alone—unless the user has enabled window
+/// controls, which implies they may hide the WM's title bar.
 pub(crate) fn movable<E: InteractiveElement>(area: E, window: &Window) -> E {
+    movable_with_controls(area, window, false)
+}
+
+/// Like `movable`, but `controls_enabled` forces dragging even with SSD,
+/// for users who hide the WM's title bar and need the menu bar to move.
+pub(crate) fn movable_with_controls<E: InteractiveElement>(
+    area: E,
+    window: &Window,
+    controls_enabled: bool,
+) -> E {
     let client = decorations::client(window);
-    if !cfg!(target_os = "macos") && !client {
+    if !cfg!(target_os = "macos") && !client && !controls_enabled {
         return area;
     }
     // The move starts on the press: pointer motion during a press is claimed
@@ -419,7 +474,7 @@ pub(crate) fn header(
     close: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Option<Stateful<Div>> {
     (cfg!(target_os = "macos") || decorations::client(window)).then(|| {
-        let buttons = controls(window, theme, close);
+        let buttons = controls(false, window, theme, close);
         render(bar(theme.surface), None, window).children(buttons)
     })
 }
@@ -598,14 +653,10 @@ mod tests {
                     size(px(28.), px(28.))
                 )
             );
-            let banner_height = if env!("HERDR_BUILD_WORKTREE") == "1" {
-                22.
-            } else {
-                0.
-            };
+            // A worktree build's banner sits at the window's foot, not here.
             assert_eq!(
                 cx.debug_bounds("window-body").unwrap().top(),
-                menu_bottom + px(34. + banner_height)
+                menu_bottom + px(34.)
             );
         }
         let bounds = cx.debug_bounds("titlebar-avatar").unwrap();
@@ -722,12 +773,8 @@ mod native_chrome_tests {
                     )
                 );
                 let body = cx.debug_bounds("window-body").unwrap();
-                let banner_height = if env!("HERDR_BUILD_WORKTREE") == "1" {
-                    22.
-                } else {
-                    0.
-                };
-                assert_eq!(body.top(), px(34. + banner_height));
+                // A worktree build's banner sits at the window's foot.
+                assert_eq!(body.top(), px(34.));
                 assert_eq!(body.size.width, px(width));
                 assert!(body.bottom() <= px(height));
             }

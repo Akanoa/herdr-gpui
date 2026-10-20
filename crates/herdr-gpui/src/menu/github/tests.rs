@@ -4,6 +4,7 @@ use gpui::TestAppContext;
 
 mod accounts;
 mod github_cli;
+mod installation;
 
 #[gpui::test]
 fn successful_signin_dismisses_only_the_signin_panel_and_restores_focus(cx: &mut TestAppContext) {

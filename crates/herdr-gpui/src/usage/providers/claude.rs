@@ -16,6 +16,8 @@ use crate::{
 use cswap::{Accounts, Other};
 use gpui::{prelude::*, *};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 pub(crate) const URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub(crate) const BETA: &str = "oauth-2025-04-20";
@@ -113,9 +115,22 @@ pub(crate) fn keychain(probe: &mut Probe) -> Option<Secret> {
     if !probe.is_macos() {
         return None;
     }
+    // Claude Code namespaces explicit profiles by the NFC-normalized config
+    // directory. Never fall back to the generic service for a selected profile:
+    // that can silently report another account's usage.
+    let service = match probe.env_path("CLAUDE_CONFIG_DIR") {
+        Some(path) => {
+            let digest = Sha256::digest(path.nfc().collect::<String>().as_bytes());
+            format!(
+                "{KEYCHAIN}-{:02x}{:02x}{:02x}{:02x}",
+                digest[0], digest[1], digest[2], digest[3]
+            )
+        }
+        None => KEYCHAIN.to_owned(),
+    };
     let user = probe.env_text("USER");
     [user.as_deref(), None].into_iter().find_map(|account| {
-        let credentials = probe.keychain(KEYCHAIN, account)?;
+        let credentials = probe.keychain(&service, account)?;
         probe.field(&credentials, &["claudeAiOauth", "accessToken"])?;
         Some(credentials)
     })

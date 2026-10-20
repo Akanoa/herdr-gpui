@@ -2,7 +2,7 @@ use super::*;
 
 /// A dispatched run whose session is reread from the database, with its
 /// workspace's recorded checkout set to `path`.
-fn run_pointing_at(site: &Site, path: Option<std::path::PathBuf>) -> String {
+fn run_pointing_at(site: &Site, path: Option<PathBuf>) -> String {
     let mut store = Store::open(&site.database).unwrap();
     let mut run = store.runs().unwrap().remove(0);
     let session = store.sessions().unwrap().remove(0);

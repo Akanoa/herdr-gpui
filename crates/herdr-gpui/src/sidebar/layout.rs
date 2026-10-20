@@ -4,6 +4,7 @@
 
 use super::{
     CHILD_INDENT, HOST_GAP, LABEL_GAP, ROW_PADDING, STATUS_WIDTH, cell::RowState, row::RowLift,
+    wash::HostMark,
 };
 use crate::{
     backdrop::Fill,
@@ -323,34 +324,56 @@ impl SidebarLook {
     /// measured geometry, and it must be the row's first child so content
     /// paints above it.
     pub(super) fn highlight(&self, key: &str, state: RowState, theme: &Theme) -> Div {
+        let inset = px(self.inset());
+        let edge = px(self.spacing() / 2.);
+        self.paint_highlight(
+            div()
+                .absolute()
+                .left(inset)
+                .right(inset)
+                .top(edge)
+                .bottom(edge),
+            key,
+            state,
+            theme,
+        )
+    }
+
+    /// Focus and hover paint for a highlight that is not the row's full
+    /// inset box. The rail's mark frame uses it so the box can hug the
+    /// shared column grid.
+    pub(super) fn paint_highlight(
+        &self,
+        layer: Div,
+        key: &str,
+        state: RowState,
+        theme: &Theme,
+    ) -> Div {
         let RowState {
             selected: focused,
             highlighted,
             ..
         } = state;
-        let inset = px(self.inset());
-        let edge = px(self.spacing() / 2.);
-        let layer = div()
+        let raised = self.badge_chrome(true, theme);
+        let quiet = self.badge_chrome(false, theme);
+        let layer = layer
             .debug_selector(|| format!("highlight-{key}"))
-            .absolute()
-            .left(inset)
-            .right(inset)
-            .top(edge)
-            .bottom(edge)
-            .rounded(px(self.density.radius));
+            .rounded(px(raised.radius));
         match self.density.highlight {
             Highlight::Fill => {
-                let active = Hsla::from(rgb(theme.active)).opacity(self.mark);
+                let active = raised.fill;
                 layer
                     .when(focused || highlighted, |layer| layer.bg(active))
                     .group_hover(ROW_GROUP, move |s| s.bg(active))
             }
             Highlight::Outline => {
-                let (hover, selected, border) = outline_washes(theme);
+                let hover = quiet.fill;
                 layer
                     .border_1()
                     .border_color(rgba(0))
-                    .when(focused, |layer| layer.bg(selected).border_color(border))
+                    .when(focused, |layer| {
+                        layer.bg(raised.fill).border_color(raised.border)
+                    })
                     .when(!focused && highlighted, |layer| layer.bg(hover))
                     .when(!focused, |layer| {
                         layer.group_hover(ROW_GROUP, move |s| s.bg(hover))
@@ -358,6 +381,42 @@ impl SidebarLook {
             }
         }
     }
+
+    /// Fill, stroke, and corner of a workspace badge. `raised` is the
+    /// selected badge, the chip around the focused workspace number. A
+    /// resting badge uses the same washes one step quieter. The collapsed
+    /// host header wears this, so it cannot drift from that number.
+    pub(super) fn badge_chrome(&self, raised: bool, theme: &Theme) -> BadgeChrome {
+        let washes = outline_washes(theme);
+        match self.density.highlight {
+            Highlight::Fill => BadgeChrome {
+                fill: rgb(theme.active).opacity(self.mark * if raised { 1. } else { BADGE_REST }),
+                border: rgba(0),
+                radius: self.density.radius,
+            },
+            Highlight::Outline => BadgeChrome {
+                fill: if raised {
+                    washes.selected
+                } else {
+                    washes.hover
+                },
+                border: if raised {
+                    washes.border
+                } else {
+                    washes.rest_border
+                },
+                radius: self.density.radius,
+            },
+        }
+    }
+}
+
+/// Fill, stroke, and corner radius shared by a workspace badge and a host header.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct BadgeChrome {
+    pub(super) fill: Rgba,
+    pub(super) border: Rgba,
+    pub(super) radius: f32,
 }
 
 impl SidebarLook {
@@ -386,25 +445,58 @@ impl SidebarLook {
                 }
             }
             Highlight::Outline => {
-                let (hover, selected, border) = outline_washes(theme);
+                let washes = outline_washes(theme);
                 if active {
-                    field.bg(selected).border_color(border)
+                    field.bg(washes.selected).border_color(washes.border)
                 } else {
+                    let hover = washes.hover;
                     field.hover(move |s| s.bg(hover))
                 }
             }
         }
     }
 
-    /// A row's state layer and hover wiring together: the lifted card while
-    /// it is carried, and no hover while a carried row passes over it.
-    pub(super) fn mark(&self, row: Div, key: &str, state: RowState, theme: &Theme) -> Div {
+    /// A row's host wash, state layer, and hover wiring together: the lifted
+    /// card while it is carried, and no hover while a carried row passes
+    /// over it.
+    pub(super) fn mark(
+        &self,
+        row: Div,
+        key: &str,
+        (state, host): (RowState, HostMark),
+        theme: &Theme,
+    ) -> Div {
         match state.lift {
-            RowLift::Resting => self
-                .hover_group(row)
-                .child(self.highlight(key, state, theme)),
-            RowLift::Passed => row.child(self.highlight(key, state, theme)),
-            RowLift::Lifted => row.child(self.lifted(key, state.selected, theme)),
+            RowLift::Resting => self.washed(
+                self.hover_group(row),
+                key,
+                host,
+                self.highlight(key, state, theme),
+            ),
+            RowLift::Passed => self.washed(row, key, host, self.highlight(key, state, theme)),
+            RowLift::Lifted => {
+                host.apply(row, key, self)
+                    .child(self.lifted(key, state.selected, theme))
+            }
+        }
+    }
+
+    /// Adds a row's host wash and its highlight `layer`, in the order that
+    /// keeps the host's colour on a marked row. An outline is translucent,
+    /// so the wash goes under it and its border stays crisp. A fill is
+    /// opaque in an opaque window and would hide the colour on exactly the
+    /// rows that are selected or pointed at, so the wash goes over it, as it
+    /// does over superset's fill. The row's content paints above both.
+    pub(super) fn washed<E: ParentElement + Styled>(
+        &self,
+        row: E,
+        key: &str,
+        host: HostMark,
+        layer: Div,
+    ) -> E {
+        match self.density.highlight {
+            Highlight::Fill => host.apply(row.child(layer), key, self),
+            Highlight::Outline => host.apply(row, key, self).child(layer),
         }
     }
 
@@ -415,7 +507,7 @@ impl SidebarLook {
     pub(super) fn lifted(&self, key: &str, focused: bool, theme: &Theme) -> Div {
         let inset = px(self.inset().max(LIFT_INSET));
         let edge = px(self.spacing() / 2.);
-        let wash = |alpha: u32| rgba((theme.foreground << 8) | alpha);
+        let washes = outline_washes(theme);
         div()
             .debug_selector(|| format!("highlight-{key}"))
             .absolute()
@@ -429,18 +521,42 @@ impl SidebarLook {
                 _ => theme.sidebar_background(),
             }))
             .when(self.density.highlight == Highlight::Outline, |card| {
-                card.border_1()
-                    .border_color(wash(if focused { 0x40 } else { 0x20 }))
+                card.border_1().border_color(if focused {
+                    washes.border
+                } else {
+                    washes.rest_border
+                })
             })
             .shadow_lg()
     }
 }
 
-/// The Outline highlight's hover fill, focused fill, and focused border:
-/// faint washes of the theme's foreground.
-fn outline_washes(theme: &Theme) -> (Rgba, Rgba, Rgba) {
+/// How far a resting fill badge steps down from the selected one: the
+/// outline hover wash over its selected wash.
+const BADGE_REST: f32 = 0x0d as f32 / 0x14 as f32;
+
+/// Foreground washes of an outline badge.
+struct OutlineWash {
+    /// Fill under the pointer, and the resting host's fill.
+    hover: Rgba,
+    /// Fill of the selected badge.
+    selected: Rgba,
+    /// Stroke of the selected badge.
+    border: Rgba,
+    /// Stroke of a resting badge. The carried card uses it when it is not
+    /// the focused row.
+    rest_border: Rgba,
+}
+
+/// The Outline highlight's washes: faint steps of the theme's foreground.
+fn outline_washes(theme: &Theme) -> OutlineWash {
     let wash = |alpha: u32| rgba((theme.foreground << 8) | alpha);
-    (wash(0x0d), wash(0x14), wash(0x40))
+    OutlineWash {
+        hover: wash(0x0d),
+        selected: wash(0x14),
+        border: wash(0x40),
+        rest_border: wash(0x20),
+    }
 }
 
 /// How far a lifted card pulls in from rows that run edge to edge.

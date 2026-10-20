@@ -34,6 +34,9 @@ fn recognizes_absolute_paths_without_io_and_canonicalizes_extensions() {
     }
 }
 
+// Item replacement directories are a macOS path layout.
+#[cfg(unix)]
+mod temporary_items;
 #[cfg(windows)]
 mod windows_paths;
 

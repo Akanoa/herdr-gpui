@@ -27,6 +27,31 @@ to package `Herdr.icns`. It also compiles `Herdr.car` (see below) and
 regenerates the PNG exports.
 Assets are checked in, so ordinary builds do not require Swift, librsvg, or Xcode.
 
+### GitHub App
+
+Upload `herdr-github-app.png` for the GitHub App logo. This 1024x1024 PNG
+uses a centered, redrawn ram head with transparent cutouts and no tile or cropped
+body. Set GitHub's badge background color to `#f4f1e9` (ivory) or `#ffffff`
+(white) for contrast with the graphite mark.
+
+The editable source is `herdr-github-app.svg`. Regenerate the upload with:
+
+```sh
+rsvg-convert -w 1024 -h 1024 assets/icons/herdr-github-app.svg \
+  -o assets/icons/herdr-github-app.png
+```
+
+`herdr-github-app-200.png` is an alternative 200x200 upload, rendered directly
+from the vector source rather than resized from the larger PNG:
+
+```sh
+rsvg-convert -w 200 -h 200 assets/icons/herdr-github-app.svg \
+  -o assets/icons/herdr-github-app-200.png
+```
+
+GitHub controls thumbnail sizing; a crisp source does not guarantee that its
+badge preview will remain sharp when enlarged or viewed at browser zoom.
+
 ### Linux desktops
 
 The tarball, Debian, RPM, Arch, and Nix packages install the circular SVG at
@@ -141,7 +166,7 @@ workspace menu alongside the original `pencil.svg` (rename), `trash.svg`
 worktree group); `git-branch.svg` is original artwork for the titlebar's Git
 actions button; `sessions.svg` is original artwork for the sidebar footer's local
 session list; `file.svg` is original document-outline artwork for Settings' Configuration section; `teleport.svg` is original artwork for moving a worktree to
-another host, and `teleport-back.svg` its mirror for bringing it back; `zoom.svg` is original artwork marking a zoomed tab in the tab strip; `window-minimize.svg`, `window-maximize.svg`, and `window-restore.svg` are original artwork for the window buttons drawn on Linux when the compositor provides none, beside `close.svg`; `user.svg` is an
+another host, and `teleport-back.svg` its mirror for bringing it back; `zoom.svg` is original artwork marking a zoomed tab in the tab strip; `window-minimize.svg`, `window-maximize.svg`, and `window-restore.svg` are original artwork for the window buttons drawn on Linux when the compositor provides none, beside `close.svg`; `pull-request.svg` and `issue.svg` are original artwork for the activity bar's Pull requests and Issues panels, and `beads.svg` for items from Beads; `user.svg` is an
 original generic silhouette for the future account placeholder, not a personal
 identity or GitHub logo. All of them are embedded through a
 minimal GPUI asset source. GPUI renders them as SVG masks tinted with the current

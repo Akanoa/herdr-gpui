@@ -86,7 +86,7 @@ fn decode_request(
         return Err(Error::RequestLimit);
     }
     let request: Request = serde_json::from_slice(&bytes)?;
-    if request.format == Format::Archive
+    if matches!(request.format, Format::Archive | Format::Installer)
         || request.executable != Path::new(SYSTEM_EXECUTABLE)
         || release::parse_version(current).is_none()
         || release::parse_version(&request.version) <= release::parse_version(current)

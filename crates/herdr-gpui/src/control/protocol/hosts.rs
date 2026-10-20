@@ -1,5 +1,5 @@
 //! Hosts and what the app gathers about them: pull requests, listening and
-//! forwarded ports, plan usage, and load.
+//! forwarded ports, plan usage, load, and Dependabot alerts.
 use serde::{Deserialize, Serialize};
 
 /// How long a pull request's comments may take to load.
@@ -38,6 +38,14 @@ pub(crate) enum HostOp {
     },
     Usage,
     System,
+    /// The Dependabot alerts the Security section last read.
+    Security,
+    /// Show an alert's (`item` a number) or a private report's (`item` a
+    /// GHSA ID) page in the Security section.
+    SecurityOpen {
+        repository: String,
+        item: String,
+    },
     /// Open the settings that add cloud machines.
     Cloud,
     /// Run the configured setup script again on the cloud device `id`, in a
@@ -178,6 +186,75 @@ pub(crate) enum Reply {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+    Security {
+        repositories: Vec<SecurityRepoInfo>,
+        /// Why the listing may be empty or cut short.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+}
+
+/// One repository the Security section read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SecurityRepoInfo {
+    /// `owner/name` on github.com.
+    pub name: String,
+    pub host: String,
+    /// Its Dependabot alerts page.
+    pub url: String,
+    /// "open", "off" (Dependabot alerts turned off), or "error".
+    pub state: String,
+    /// Open alerts GitHub counts, which may be more than `alerts` holds.
+    pub total: u64,
+    pub alerts: Vec<SecurityAlertInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Private vulnerability reporting: "on", "off", "hidden" (this sign-in
+    /// may not read reports), or "error".
+    pub reporting: String,
+    /// Reports outsiders filed, in triage: titles and metadata only.
+    pub reports: Vec<SecurityReportInfo>,
+    /// Whether GitHub holds more reports in triage than the section read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub more_reports: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reports_error: Option<String>,
+}
+
+/// A private vulnerability report. Its description is never carried: the
+/// vulnerability is not fixed yet, and the user reads it on GitHub.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SecurityReportInfo {
+    /// The draft advisory's GHSA identifier.
+    pub advisory: String,
+    pub summary: String,
+    /// The reporter's rating, when they gave one.
+    pub severity: Option<String>,
+    pub reporter: Option<String>,
+    /// RFC 3339.
+    pub created_at: Option<String>,
+    /// The report's page.
+    pub url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SecurityAlertInfo {
+    pub number: u64,
+    /// "critical", "high", "moderate", or "low".
+    pub severity: String,
+    pub package: String,
+    pub ecosystem: String,
+    pub summary: String,
+    /// The GHSA identifier.
+    pub advisory: String,
+    pub advisory_url: Option<String>,
+    /// The affected version range.
+    pub vulnerable: String,
+    /// The first fixed version, when one is published.
+    pub patched: Option<String>,
+    pub manifest: String,
+    /// The alert's page.
+    pub url: String,
 }
 
 #[cfg(test)]

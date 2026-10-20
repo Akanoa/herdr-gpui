@@ -21,6 +21,7 @@ fn profile(token: Arc<SecretString>) -> Result<Profile> {
         avatar_updates: None,
         source: Default::default(),
         organizations: None,
+        access: Default::default(),
     })
 }
 

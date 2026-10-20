@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used)]
 use super::*;
 
+mod counted_probes;
+
 #[test]
 fn close_probe_detects_untracked_staged_unstaged_and_unpublished_work() {
     let directory = tempfile::tempdir().unwrap();

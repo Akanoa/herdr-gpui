@@ -16,6 +16,7 @@ fn the_github_cli_is_read_outside_the_credential_lock() {
             avatar_updates: None,
             source: crate::github::Source::GitHubCli { repo_scope: true },
             organizations: None,
+            access: Default::default(),
         })
     })
     .unwrap()

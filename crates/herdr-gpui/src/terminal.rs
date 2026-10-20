@@ -481,6 +481,20 @@ pub fn viewport(width: f32, height: f32, cell_width: f32, cell_height: f32) -> C
 // `alt_keys` claims Alt-modified characters as shortcuts instead; without it
 // macOS Option-P commits `π` and the shortcut never reaches the pane.
 pub fn key_input(event: &KeyDownEvent, alt_keys: bool) -> Option<ClientPaneInputEvent> {
+    // Windows reports AltGr as Ctrl+Alt, and GPUI marks a keystroke whose
+    // modifiers change the character it types as preferring character input.
+    // A marked Ctrl+Alt keystroke with a character is AltGr typing, as `?` on
+    // a Brazilian layout: claimed as a chord, Windows never delivers the
+    // character. The mark alone is not enough, because GPUI also sets it on
+    // every keystroke it replays after an unfinished multi-key binding.
+    let modifiers = event.keystroke.modifiers;
+    if event.prefer_character_input
+        && modifiers.control
+        && modifiers.alt
+        && event.keystroke.key_char.is_some()
+    {
+        return None;
+    }
     keystroke_input(&event.keystroke, event.is_held, alt_keys)
 }
 

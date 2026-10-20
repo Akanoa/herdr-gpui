@@ -549,3 +549,5 @@ fn teleport_copies_the_repository_where_it_is_missing() {
     );
     assert_eq!(a.snapshot().tabs_of(&source_ws).len(), 1);
 }
+
+mod session_only;

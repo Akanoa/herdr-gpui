@@ -4,6 +4,7 @@ use herdr_client::protocol::FrameData;
 mod agent_recency;
 mod agent_status;
 mod announcements;
+mod atomic_projection;
 mod cleanup_slot;
 mod connection_status;
 mod daemon_messages;

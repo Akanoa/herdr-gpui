@@ -1,4 +1,7 @@
 use super::*;
+use super::{review_repository as review, run_repository as run};
+
+mod session_only;
 use crate::teleport::Host;
 use herdr_client::ConnectTarget;
 use std::{
@@ -142,7 +145,6 @@ fn fixture(checkout: impl FnOnce(&Fixture) -> PathBuf) -> Fixture {
     fs::create_dir(main.join("sub")).unwrap();
     let source_home = temp.path().join("source home");
     let destination_home = temp.path().join("destination home");
-    let key = main.join(".git").to_string_lossy().into_owned();
     let mut fixture = Fixture {
         origin: Origin {
             place: Place {
@@ -152,8 +154,6 @@ fn fixture(checkout: impl FnOnce(&Fixture) -> PathBuf) -> Fixture {
             },
             workspace_id: "w1".into(),
             pane_id: "w1:p2".into(),
-            repo_key: key,
-            repo_label: "app".into(),
         },
         hosts: HostRepositories {
             place: Place {
@@ -179,7 +179,7 @@ fn fixture(checkout: impl FnOnce(&Fixture) -> PathBuf) -> Fixture {
     let checkout = checkout.to_str().unwrap();
     let snapshot = serde_json::json!({"result": {"snapshot": {
         "workspaces": [{"workspace_id": "w1", "worktree": {
-            "repo_key": fixture.origin.repo_key, "repo_name": "app",
+            "repo_key": fixture.main.join(".git"), "repo_name": "app",
             "repo_root": fixture.main, "checkout_path": checkout,
             "is_linked_worktree": checkout != fixture.main.to_str().unwrap(),
         }}],

@@ -1,4 +1,4 @@
-//! `pr`, `host`, `cloud`, and `ports`.
+//! `pr`, `host`, `cloud`, `ports`, and `security`.
 use super::{Args, CliError, unknown};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +24,17 @@ pub enum CloudCommand {
     Add,
     /// Run the configured setup script on a saved machine again.
     Setup(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SecurityCommand {
+    List,
+    /// Show an alert (`42`) or a private report (`GHSA-…`) of `repository`
+    /// in the section, beside its list.
+    Open {
+        repository: String,
+        item: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +66,20 @@ pub(super) fn host(args: &mut Args) -> Result<HostCommand, CliError> {
         Some("list") => HostCommand::List,
         Some("select") => HostCommand::Select(args.required_text("HOST")?),
         _ => return Err(unknown("host", verb)),
+    })
+}
+
+pub(super) fn security(args: &mut Args) -> Result<SecurityCommand, CliError> {
+    let Some(verb) = args.verb() else {
+        return Ok(SecurityCommand::List);
+    };
+    Ok(match verb.to_str() {
+        Some("list") => SecurityCommand::List,
+        Some("open") => SecurityCommand::Open {
+            repository: args.required_text("REPOSITORY")?,
+            item: args.required_text("ALERT|GHSA")?,
+        },
+        _ => return Err(unknown("security", verb)),
     })
 }
 

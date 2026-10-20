@@ -10,8 +10,12 @@ mod clicks;
 mod conversation;
 mod conversation_list;
 mod dialog;
-mod host_badges;
+mod empty;
+mod groups;
 mod markdown;
+mod pills;
+mod pr_empty;
+mod refresh;
 mod rows;
 mod sessions;
 

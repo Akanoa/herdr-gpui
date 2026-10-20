@@ -55,7 +55,7 @@ fn query(format: Format, executable: &Path) -> Command {
             command.arg("-Qoq");
             command
         }
-        Format::Archive => unreachable!(),
+        Format::Archive | Format::Installer => unreachable!(),
     };
     command.arg(executable);
     command
@@ -166,7 +166,7 @@ fn install_command(format: Format, path: &Path) -> Command {
             command.args(["-U", "--noconfirm", "--"]);
             command
         }
-        Format::Archive => unreachable!(),
+        Format::Archive | Format::Installer => unreachable!(),
     };
     command
         .arg(path)
@@ -266,7 +266,7 @@ fn installed_version(format: Format, cancel: &AtomicBool) -> Result<String> {
             command.args(["-Q", "herdr-gpui"]);
             command
         }
-        Format::Archive => unreachable!(),
+        Format::Archive | Format::Installer => unreachable!(),
     };
     let output = install::output(&mut command, cancel)?;
     Ok(output
