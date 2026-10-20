@@ -23,6 +23,10 @@ fn held_window(
 
 /// Publish a newer snapshot focused on `focus` without its surface, and
 /// return the surface that closes the gap.
+///
+/// The snapshot also republishes the host's key bindings: a snapshot that
+/// changes only metadata keeps input flowing, so a gap that holds input
+/// must change something input depends on even when focus stays put.
 fn open_gap(
     view: &mut HerdrWindow,
     cx: &mut Context<HerdrWindow>,
@@ -31,6 +35,7 @@ fn open_gap(
     let mut next = (**view.live.snapshot.as_ref().unwrap()).clone();
     next.revision += 1;
     next.focused_pane_id = Some(focus.into());
+    next.server_keybindings_toml = Some(format!("[keys]\n# revision {}", next.revision));
     let mut frame = (**view.live.surface.as_ref().unwrap()).clone();
     frame.projection_revision = next.revision;
     view.endpoints[1]
