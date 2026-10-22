@@ -79,6 +79,29 @@ pub enum Error {
     Storage(#[source] Box<crate::Error>),
     #[error("Coder {0} worker stopped.")]
     Worker(&'static str),
+    /// A display name a command gave that more than one template has.
+    #[error("Several Coder templates are shown as {name} ({matches}); name one by its name or ID.")]
+    AmbiguousTemplate { name: String, matches: String },
+    /// A template a command named, or none when the deployment has several.
+    /// `available` lists the deployment's templates by name, bounded.
+    #[error("{}", template_message(.name.as_deref(), .available))]
+    Template {
+        name: Option<String>,
+        available: String,
+    },
+    #[error("The Coder template {template} has no preset named {name}; it has {available}.")]
+    Preset {
+        template: String,
+        name: String,
+        available: String,
+    },
+}
+
+fn template_message(name: Option<&str>, available: &str) -> String {
+    match name {
+        Some(name) => format!("Coder has no template named {name}; it has {available}."),
+        None => format!("Coder has several templates ({available}); name one with --template."),
+    }
 }
 
 impl Error {

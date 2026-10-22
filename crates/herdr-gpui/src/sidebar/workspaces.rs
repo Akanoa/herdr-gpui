@@ -100,12 +100,12 @@ pub(super) fn visible_workspace_entries(
 /// simply shows nothing, never a stale or guessed state. `git` carries which counts to show:
 /// the pull request's, or the checkout's uncommitted lines, never both. Its cache is `None`
 /// for a row on another device: it only ever probes this machine's checkouts.
-/// `cache` is `None` for a row on a device other than the selected one: the
-/// cache holds only that device's lookups, and the same path and branch can
-/// exist on another host.
+/// `pr` pairs the PR cache with the view of the device the row is on, whether
+/// or not it is selected, and is `None` for a device whose pull requests are
+/// not looked up.
 pub(super) fn workspace_badge(
     workspace: &ClientShellWorkspace,
-    cache: Option<&crate::pull_request::Cache>,
+    pr: Option<(&crate::pull_request::Cache, &crate::pull_request::View)>,
     git: (Option<&crate::git::Git>, ChangeCounts),
     marks: (&crate::teleport::Marks, &str),
     note: Option<&str>,
@@ -114,7 +114,7 @@ pub(super) fn workspace_badge(
     let key = workspace.worktree.as_ref()?.key.as_str();
     let branch = workspace.branch.as_deref()?;
     let ((marks, endpoint), (git, counts)) = (marks, git);
-    let pr = cache.and_then(|cache| cache.peek(key, branch));
+    let pr = pr.and_then(|(cache, view)| cache.peek(view, key, branch));
     let counts = match counts {
         ChangeCounts::PullRequest => pr
             .as_ref()

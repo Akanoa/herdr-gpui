@@ -45,8 +45,8 @@ pub use crossbeam_channel::Receiver;
 pub use herdr_protocol as protocol;
 
 pub use catalog::{
-    SavedHost, load_saved_host_selection, load_saved_hosts, store_saved_host_selection,
-    valid_profile_id,
+    SavedHost, load_saved_host_selection, load_saved_hosts, store_saved_host,
+    store_saved_host_selection, valid_profile_id,
 };
 pub use clipboard::{ClipboardImageCancellation, ClipboardImageUpload};
 pub use compat::{MIN_HERDR_VERSION, VersionMismatch};

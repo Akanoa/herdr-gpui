@@ -89,7 +89,11 @@ fn right_clicking_a_cloud_device_offers_rename_settings_setup_and_removal(cx: &m
     view.read_with(cx, |view, _| {
         let note = super::super::removal_note(host(view));
         assert!(note.contains("Build box (herdr-tidy-lark-aa)"), "{note}");
-        assert!(note.contains("itself is left as it is"), "{note}");
+        let kept = match crate::cloud::deletion(provider()) {
+            Some(_) => "cannot be undone",
+            None => "itself is left as it is",
+        };
+        assert!(note.contains(kept), "{note}");
     });
     cx.update(|window, cx| crate::sidebar::layout_tests::full_draw(window, cx).clear(cx));
     assert!(cx.debug_bounds("remove-device").is_some());

@@ -175,6 +175,27 @@ impl Request<'_> {
         self.send(context, self.call(agent().patch(self.url(path)))?, payload)
     }
 
+    /// A DELETE Boat accepts only with `confirm`, the target's exact ID, in
+    /// its confirmation header. The reply body is not needed.
+    pub(crate) fn delete_confirmed(
+        &self,
+        context: &'static str,
+        path: &str,
+        confirm: &str,
+    ) -> Result<()> {
+        let mut reply = self
+            .call(agent().delete(self.url(path)))?
+            .header("X-Ascii-Confirm-Delete", header(confirm)?)
+            .call()
+            .map_err(network(context))?;
+        let status = reply.status().as_u16();
+        let bytes = body(&mut reply)?;
+        if (200..=299).contains(&status) {
+            return Ok(());
+        }
+        Err(failure(context, status, &bytes))
+    }
+
     fn send<T: DeserializeOwned>(
         &self,
         context: &'static str,

@@ -182,6 +182,20 @@ impl Request<'_> {
         let bytes = body(&mut reply)?;
         Err(failure(context, status, &bytes))
     }
+
+    /// A DELETE whose reply body is not needed.
+    pub(crate) fn delete(&self, context: &'static str, path: &str) -> Result<()> {
+        let mut reply = self
+            .call(agent().delete(self.url(path)))?
+            .call()
+            .map_err(network(context))?;
+        let status = reply.status().as_u16();
+        let bytes = body(&mut reply)?;
+        if (200..=299).contains(&status) {
+            return Ok(());
+        }
+        Err(failure(context, status, &bytes))
+    }
 }
 
 #[cfg(test)]

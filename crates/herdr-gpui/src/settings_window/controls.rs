@@ -9,6 +9,7 @@ pub(super) mod plugins;
 pub(super) use fonts::native_probe;
 pub(super) use fonts::{face_font, family_label};
 pub(super) mod preferences;
+pub(super) mod px0;
 
 use super::{Section, SettingsWindow};
 use crate::{
@@ -182,6 +183,7 @@ impl SettingsWindow {
         self.plugins
             .refresh_appearance(&self.config, &self.theme, cx);
         self.refresh_code_appearance(cx);
+        self.sync_px0_field(cx);
         if let Some(edit) = &self.number_edit {
             edit.input.update(cx, |input, cx| {
                 input.set_appearance(self.config.ui.clone(), self.theme.clone(), cx);

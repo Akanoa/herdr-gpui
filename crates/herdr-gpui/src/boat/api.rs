@@ -218,6 +218,17 @@ impl Request<'_> {
         .map(drop)
     }
 
+    /// Delete the sandbox and its snapshots for good. Boat accepts it at once
+    /// and erases the data in the background; from then on the sandbox is
+    /// gone from lists, resumes, and billing. One already gone is deleted.
+    pub(crate) fn destroy(&self, id: &str) -> Result<()> {
+        let id = segment(id)?;
+        match self.delete_confirmed("delete_sandbox", &format!("/sandboxes/{id}"), id) {
+            Err(Error::Status(super::Status { code: 404, .. })) => Ok(()),
+            result => result,
+        }
+    }
+
     pub(crate) fn ssh_access(&self, id: &str, public_key: &str) -> Result<SshAccess> {
         self.post(
             "ssh_access",

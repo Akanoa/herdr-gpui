@@ -15,6 +15,14 @@ mod missing;
 mod pause;
 mod shared;
 
+/// The view a [`Peer`] starts in: this machine, read with the fixture account.
+fn local() -> crate::pull_request::View {
+    crate::pull_request::View {
+        origin: Origin::Local,
+        login: "fixture".into(),
+    }
+}
+
 fn input(branch: &str) -> Input {
     Input {
         checkout: None,
@@ -99,7 +107,7 @@ fn explicit_refresh_keeps_cached_details_and_coalesces_in_flight_requests() {
     peer.cache.poll(now);
     assert_eq!(
         peer.cache
-            .peek(input.repo_key.as_deref().unwrap(), &input.branch)
+            .peek(&local(), input.repo_key.as_deref().unwrap(), &input.branch)
             .unwrap()
             .number,
         8
@@ -112,7 +120,7 @@ fn explicit_refresh_keeps_cached_details_and_coalesces_in_flight_requests() {
     peer.complete(now, Ok(Some(updated)), None);
     let pr = peer
         .cache
-        .peek(input.repo_key.as_deref().unwrap(), &input.branch)
+        .peek(&local(), input.repo_key.as_deref().unwrap(), &input.branch)
         .unwrap();
     assert!(pr.is_draft);
     assert_eq!(pr.checks_summary, "2 pending");
@@ -137,7 +145,7 @@ fn explicit_refresh_respects_account_backoff_and_bounds_the_queue() {
     assert_eq!(peer.complete(now + ERROR_BACKOFF, Ok(None), None), input);
     assert!(
         peer.cache
-            .peek(input.repo_key.as_deref().unwrap(), &input.branch)
+            .peek(&local(), input.repo_key.as_deref().unwrap(), &input.branch)
             .is_none()
     );
 }
@@ -258,9 +266,18 @@ fn scope_changes_fence_late_results_and_only_another_account_forgets_answers() {
             _ => peer.cache.retain(|input| input.branch == "new"),
         }
         assert_eq!(
-            peer.cache.peek("/repo/.git", "cached").is_some(),
+            peer.cache
+                .peek(&peer.cache.view, "/repo/.git", "cached")
+                .is_some(),
             (2..=5).contains(&change),
             "cached answer after change {change}"
+        );
+        // Another account or device keeps this one's answers for its rows;
+        // only signing out or the checkout going away drops them.
+        assert_eq!(
+            peer.cache.peek(&local(), "/repo/.git", "cached").is_some(),
+            (1..=6).contains(&change),
+            "kept answer after change {change}"
         );
         assert!(peer.cache.queue.is_empty());
         peer.outgoing
@@ -290,9 +307,24 @@ fn another_device_keeps_this_ones_answers_for_when_it_is_selected_again() {
     peer.cache.seed(input("feature"), fixture().unwrap(), now);
     let token = peer.cache.token.clone().unwrap();
     let remote = Origin::Ssh("host".into());
-    peer.cache
-        .scope((1, 1, "boot".into()), token.clone(), "fixture", remote);
-    assert!(peer.cache.peek("/repo/.git", "feature").is_none());
+    peer.cache.scope(
+        (1, 1, "boot".into()),
+        token.clone(),
+        "fixture",
+        remote.clone(),
+    );
+    assert!(
+        peer.cache
+            .peek(
+                &crate::pull_request::View {
+                    origin: remote.clone(),
+                    login: "fixture".into(),
+                },
+                "/repo/.git",
+                "feature",
+            )
+            .is_none()
+    );
     // The same path on that device is another checkout: it is asked for.
     peer.cache.schedule([input("feature")], now);
     assert_eq!(peer.cache.queue.len(), 1);
@@ -300,7 +332,13 @@ fn another_device_keeps_this_ones_answers_for_when_it_is_selected_again() {
     peer.cache.retain(|_| false);
     peer.cache
         .scope((2, 1, "boot".into()), token, "fixture", Origin::Local);
-    assert_eq!(peer.cache.peek("/repo/.git", "feature").unwrap().number, 8);
+    assert_eq!(
+        peer.cache
+            .peek(&local(), "/repo/.git", "feature")
+            .unwrap()
+            .number,
+        8
+    );
 }
 
 #[test]

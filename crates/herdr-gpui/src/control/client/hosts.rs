@@ -1,5 +1,7 @@
 //! `pr`, `host`, `cloud`, `ports`, `usage`, `system`, and `security`.
+mod batch;
 mod cloud;
+mod exec;
 mod text;
 
 pub(super) use text::bytes;
@@ -76,6 +78,8 @@ pub(super) fn cloud(command: CloudCommand, context: &Context) -> crate::Result<O
         CloudCommand::List => cloud::list(),
         CloudCommand::Add => context.act(Request::Host, HostOp::Cloud),
         CloudCommand::Setup(id) => context.act(Request::Host, HostOp::CloudSetup { id }),
+        CloudCommand::Batch(command) => batch::run(command, context),
+        CloudCommand::Exec(command) => exec::run(command, context),
     }
 }
 

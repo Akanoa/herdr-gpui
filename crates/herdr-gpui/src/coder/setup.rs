@@ -134,40 +134,6 @@ fn ssh(settings: &Settings, ready: &Ready) -> Result<std::process::Command> {
     )
 }
 
-/// Create or attach, wait until the agent is ready, and report whether Herdr
-/// is already installed there.
-pub(crate) fn provision(
-    settings: &Settings,
-    source: Source,
-    cancelled: impl Fn() -> bool,
-    mut step: impl FnMut(Step),
-) -> Result<(Ready, bool)> {
-    // Fail before creating anything when the transport cannot run later.
-    connect::cli(settings)?;
-    let tokens = tokens(settings);
-    let (id, name) = match source {
-        Source::Existing { id, name } => (id, name),
-        Source::New {
-            name,
-            template,
-            preset,
-        } => {
-            step(Step::Creating);
-            let created = store::with_token(&tokens, |token| {
-                Client::new(settings, token).create(&name, &template, preset.as_ref())
-            })?;
-            (created.id, created.name)
-        }
-    };
-    let (_, agent) = api::wait_ready(settings, &tokens, &id, &cancelled, |progress| {
-        step(Step::Waiting(progress));
-    })?;
-    let ready = Ready { id, name, agent };
-    step(Step::CheckingHerdr);
-    let installed = install::installed(ssh(settings, &ready)?, &cancelled)?;
-    Ok((ready, installed))
-}
-
 pub(crate) fn install(
     settings: &Settings,
     ready: &Ready,
@@ -242,15 +208,67 @@ pub(crate) fn add_device(
     cancelled: &dyn Fn() -> bool,
     report: &dyn Fn(cloud::Step),
 ) -> crate::Result<SavedDevice> {
-    let AddRequest {
-        settings,
-        source,
-        label,
-        install,
-    } = request;
-    let (ready, installed) = provision(&settings, source, cancelled, |s| report(step(s)))?;
-    if !installed {
-        if !install {
+    let settings = &request.settings;
+    // Fail before creating anything when the transport cannot run later.
+    connect::cli(settings)?;
+    let tokens = tokens(settings);
+    let (id, name) = match &request.source {
+        Source::Existing { id, name } => {
+            return finish(
+                &request,
+                &tokens,
+                id.clone(),
+                name.clone(),
+                cancelled,
+                report,
+            );
+        }
+        Source::New {
+            name,
+            template,
+            preset,
+        } => {
+            report(step(Step::Creating));
+            let created = store::with_token(&tokens, |token| {
+                Client::new(settings, token).create(name, template, preset.as_ref())
+            })?;
+            (created.id, created.name)
+        }
+    };
+    cloud::discard_on_error(
+        CloudProvider::Coder,
+        &id,
+        || finish(&request, &tokens, id.clone(), name, cancelled, report),
+        || {
+            Ok(super::destroy::destroy(
+                settings,
+                &tokens,
+                &id,
+                || false,
+                |_| {},
+            )?)
+        },
+    )
+}
+
+/// Wait until workspace `id`'s agent is ready, check for (and when
+/// `request` allows, install) Herdr, and save the device.
+fn finish(
+    request: &AddRequest,
+    tokens: &impl Fn(bool) -> Result<SecretString>,
+    id: String,
+    name: String,
+    cancelled: &dyn Fn() -> bool,
+    report: &dyn Fn(cloud::Step),
+) -> crate::Result<SavedDevice> {
+    let settings = &request.settings;
+    let (_, agent) = api::wait_ready(settings, tokens, &id, cancelled, |progress| {
+        report(step(Step::Waiting(progress)));
+    })?;
+    let ready = Ready { id, name, agent };
+    report(step(Step::CheckingHerdr));
+    if !install::installed(ssh(settings, &ready)?, &cancelled)? {
+        if !request.install {
             return Err(cloud::Error::Install(format!(
                 "Herdr is not installed in {}; add it and try again",
                 ready.name
@@ -258,14 +276,14 @@ pub(crate) fn add_device(
             .into());
         }
         report(cloud::Step::InstallingHerdr);
-        self::install(&settings, &ready, cancelled)?;
+        install(settings, &ready, cancelled)?;
     }
-    let label = if label.is_empty() {
+    let label = if request.label.is_empty() {
         &ready.name
     } else {
-        &label
+        &request.label
     };
-    Ok(save(&settings, &ready, label, SESSION)?)
+    Ok(save(settings, &ready, label, SESSION)?)
 }
 
 /// The sign-in as Settings shows it.
@@ -330,6 +348,27 @@ pub(crate) fn destroy_device(
 ) -> Result<()> {
     super::destroy::destroy(settings, &tokens(settings), id, cancelled, stage)?;
     forget_device(id)
+}
+
+/// Destroy the saved device `id` with the configured deployment, as the
+/// sidebar's Remove does when asked to delete it at Coder too. A device no
+/// longer saved has nothing left to do; one saved from another deployment is
+/// refused. Blocks: run it off the UI thread.
+pub(crate) fn destroy_saved(id: &str) -> crate::Result<()> {
+    let Some(device) = cloud::load()?
+        .into_iter()
+        .find(|device| device.provider == CloudProvider::Coder && device.id == id)
+    else {
+        return Ok(());
+    };
+    let settings = crate::config::Config::load()?
+        .coder
+        .settings()?
+        .ok_or(Error::Missing("url"))?;
+    if settings.base != device.account {
+        return Err(Error::Deployment.into());
+    }
+    Ok(destroy_device(&settings, id, || false, |_| {})?)
 }
 
 /// Save (or with `None`, forget) the OAuth client secret typed into Settings.

@@ -28,6 +28,12 @@ pub(crate) enum Page {
     /// Go to Symbol and Go to File over the focused pane's checkout.
     CodeSearch,
     ConfirmClose,
+    /// Confirming new cloud machines a command asked for should be made.
+    #[cfg(feature = "cloud")]
+    CreateCloud,
+    /// Confirming saved cloud devices a command named should be destroyed.
+    #[cfg(feature = "cloud")]
+    DestroyCloud,
     Devices,
     /// Picks a saved SSH device's terminal theme.
     DeviceTheme,

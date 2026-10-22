@@ -155,6 +155,12 @@ keep_selection_after_copy = true
 # only) draw rows with a design of their own. "devices" lists each device with
 # its agents under it, and a search over them. View > Layout lists them all.
 layout = "normal"
+# How tab strips draw their tabs: "classic" (even cells divided by a rule),
+# "pills" (rounded pills led by the agent's logo, the status after the title),
+# "underline" (flat titles, a bar under the chosen one), "cards" (browser-like,
+# the chosen tab joined to its terminal), or "compact" (icons only, the chosen
+# tab named). View > Tab Layout lists them all.
+tab_layout = "classic"
 
 [palette]
 # Two short Shift taps open the unified palette in the focused GUI window.
@@ -416,6 +422,12 @@ size = 12
 # port = 51234
 # license_accepted = true
 # url = "http://127.0.0.1:8000/?tkn=..."
+
+# px0 in an editor tab (local workspaces on macOS and Windows). With no url,
+# discover an existing workbench, or start installed px0 lazily. Set a local
+# workbench address to attach to your own. Settings > Code edits this value.
+# [px0]
+# url = "http://127.0.0.1:7777/"
 
 # Native GitHub sign-in uses the public Herdr GPUI GitHub App by default.
 # Optionally override with your own Device Flow-enabled app's public client ID.

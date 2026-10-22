@@ -24,6 +24,7 @@ use protocol::Caller;
 pub use protocol::ErrorCode;
 pub(crate) use protocol::NotesTo;
 pub(crate) use protocol::Response;
+pub(crate) use protocol::cloud as batch;
 pub use protocol::{
     app::{FontSize, Size, Switch},
     events::{Cursor, EventKind},

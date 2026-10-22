@@ -5,6 +5,7 @@
 
 mod api;
 mod connect;
+pub(crate) mod create;
 mod destroy;
 mod error;
 mod http;

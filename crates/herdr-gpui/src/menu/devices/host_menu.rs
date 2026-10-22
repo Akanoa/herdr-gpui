@@ -78,10 +78,11 @@ pub(crate) struct HostMenu {
     /// Also delete the device's own GitHub sign-in. Offered only when it has
     /// one, since its account panel disappears with the device.
     forget_github: bool,
-    /// Delete an Azure device's machine at Azure, with everything it bills
-    /// for, before forgetting it: what Remove does for Azure unless Remove
-    /// from Herdr only is chosen, since a forgotten machine keeps billing.
-    #[cfg(feature = "azure")]
+    /// Delete a cloud device's machine at its provider, with everything it
+    /// bills for, before forgetting it: what Remove does for a provider that
+    /// can unless Remove from Herdr only is chosen, since a forgotten machine
+    /// keeps billing.
+    #[cfg(feature = "cloud")]
     destroy: bool,
     /// The new name while renaming, or the port to forward.
     input: Option<Entity<SearchInput>>,
@@ -210,7 +211,7 @@ impl HerdrWindow {
             session: session.to_owned(),
             selected: None,
             forget_github: true,
-            #[cfg(feature = "azure")]
+            #[cfg(feature = "cloud")]
             destroy: true,
             input: None,
             renaming: false,
@@ -397,8 +398,8 @@ impl HerdrWindow {
             return;
         };
         let forget = host.forget_github && self.host_has_github(&host.id);
-        #[cfg(feature = "azure")]
-        let destroy = host.destroy && host.is_azure();
+        #[cfg(feature = "cloud")]
+        let deletion = host.deletion().filter(|_| host.destroy);
         let store = self.menu.github_hosts.get(&host.id).map_or_else(
             || crate::github::Store::select(&self.config),
             |auth| auth.store(),
@@ -425,16 +426,16 @@ impl HerdrWindow {
                     })
                 }
                 // The machine itself is left as it is at the provider, unless
-                // an Azure one was asked to go too: then it goes first, and a
-                // failure keeps the device listed rather than billing unseen.
+                // it was asked to go too: then it goes first, and a failure
+                // keeps the device listed rather than billing unseen.
                 #[cfg(feature = "cloud")]
                 Saved::Cloud { provider, id } => {
+                    if let Some(deletion) = deletion {
+                        (deletion.run)(&id)?;
+                        return Ok(Ok(()));
+                    }
                     #[cfg(feature = "azure")]
                     if provider == herdr_client::CloudProvider::Azure {
-                        if destroy {
-                            crate::azure::destroy::destroy_saved(&id)?;
-                            return Ok(Ok(()));
-                        }
                         crate::azure::forget_activity(&id);
                     }
                     crate::cloud::remove(provider, &id)?;
@@ -881,7 +882,7 @@ fn rename(saved: &Saved, label: &str) -> crate::Result<()> {
 /// What removal does, as the confirmation says it: an SSH device leaves its
 /// host's Herdr running, a cloud device leaves its machine at the provider.
 fn removal_note(host: &HostMenu) -> String {
-    #[cfg(feature = "azure")]
+    #[cfg(feature = "cloud")]
     if let Some(note) = destroy::removal_note(host) {
         return note;
     }
@@ -901,21 +902,21 @@ fn removal_note(host: &HostMenu) -> String {
     }
 }
 
-#[cfg(feature = "azure")]
+#[cfg(feature = "cloud")]
 mod destroy;
-#[cfg(feature = "azure")]
+#[cfg(feature = "cloud")]
 use destroy::remove_label;
 mod forwards;
 mod theme;
 
-#[cfg(not(feature = "azure"))]
+#[cfg(not(feature = "cloud"))]
 impl HerdrWindow {
     fn remove_only_button(&self, _: &HostMenu, _: &mut Context<Self>) -> Option<Div> {
         None
     }
 }
 
-#[cfg(not(feature = "azure"))]
+#[cfg(not(feature = "cloud"))]
 fn remove_label(_: &HostMenu) -> String {
     "Remove".to_owned()
 }

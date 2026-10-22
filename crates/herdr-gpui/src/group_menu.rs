@@ -31,6 +31,7 @@ enum Action {
     Orchestrator,
     /// The workspace's VS Code tab, opened in this group.
     VsCode,
+    Px0,
     /// One of the focused workspace's listening ports and where it opens.
     Port {
         number: u16,
@@ -55,6 +56,7 @@ impl Action {
             Self::Review => "Review Changes".into(),
             Self::Orchestrator => "Issues and pull requests".into(),
             Self::VsCode => "VS Code".into(),
+            Self::Px0 => "px0".into(),
             Self::Port { link, .. } => link.label().into(),
             Self::Close => "Close Tab".into(),
             Self::CloseOthers => "Close Others".into(),
@@ -68,7 +70,8 @@ impl Action {
             Self::NewBrowserTab => Some("icons/globe.svg"),
             Self::Review => Some("icons/diff-unified.svg"),
             Self::Orchestrator => Some("icons/issue.svg"),
-            Self::VsCode => Some("icons/vscode.svg"),
+            Self::VsCode => Some(crate::browser::Editor::VsCode.icon()),
+            Self::Px0 => Some(crate::browser::Editor::Px0.icon()),
             Self::Port { .. } => Some("icons/arrow-right.svg"),
             Self::Split => Some("icons/split.svg"),
             Self::Close | Self::CloseOthers | Self::CloseGroup => None,
@@ -86,7 +89,7 @@ impl Action {
     /// Which run of rows this one belongs to; a rule separates runs.
     fn section(&self) -> u8 {
         match self {
-            Self::NewBrowserTab | Self::Review | Self::Orchestrator | Self::VsCode => 0,
+            Self::NewBrowserTab | Self::Review | Self::Orchestrator | Self::VsCode | Self::Px0 => 0,
             Self::Port { .. } => 1,
             Self::Close | Self::CloseOthers | Self::CloseGroup => 2,
             Self::Split => 3,
@@ -126,6 +129,9 @@ impl HerdrWindow {
         }
         if self.code_offered(cx) {
             actions.push(Action::VsCode);
+        }
+        if crate::browser::EMBEDDED && self.px0_root().is_some() {
+            actions.push(Action::Px0);
         }
         if let Some((_, _, listed)) = self.focused_listening_ports() {
             actions.extend(listed.ports.iter().filter_map(|port| {
@@ -184,6 +190,9 @@ impl HerdrWindow {
             Action::Review => self.open_review(window, cx),
             Action::Orchestrator => self.open_orchestrator(window, cx),
             Action::VsCode => self.open_code(Some(group), window, cx),
+            Action::Px0 => {
+                self.open_px0(Some(group), window, cx);
+            }
             Action::Port { link, .. } => {
                 let Some((endpoint, workspace)) = self
                     .focused_listening_ports()
@@ -305,6 +314,7 @@ impl HerdrWindow {
                     .into(),
                 // It has no default key; one bound to open_code shows.
                 Action::VsCode => self.keymap().primary(Command::OpenCode).to_owned().into(),
+                Action::Px0 => self.keymap().primary(Command::OpenPx0).to_owned().into(),
                 Action::Port { process, .. } => process.clone().into(),
                 _ => "".into(),
             };

@@ -59,12 +59,29 @@ pub(crate) fn add_device(
     };
     report(cloud::Step::Creating);
     let created = request.create(&name)?;
-    let sandbox = api::wait_ready(&request, &created.id, cancelled, |readiness| {
+    cloud::discard_on_error(
+        CloudProvider::Daytona,
+        &created.id,
+        || finish(&request, &created.id, install, cancelled, report),
+        || Ok(request.destroy(&created.id)?),
+    )
+}
+
+/// Wait for the sandbox `id` Daytona just made, check for (and when allowed,
+/// install) Herdr, and save the device.
+fn finish(
+    request: &Request,
+    id: &str,
+    install: bool,
+    cancelled: &dyn Fn() -> bool,
+    report: &dyn Fn(cloud::Step),
+) -> crate::Result<SavedDevice> {
+    let sandbox = api::wait_ready(request, id, cancelled, |readiness| {
         report(step(readiness));
     })?;
     report(cloud::Step::CheckingHerdr);
     // Each `ssh` run gets its own gateway file, removed once the run ends.
-    let installed = install::installed(connect::gateway(&request, &sandbox)?.command, &cancelled)?;
+    let installed = install::installed(connect::gateway(request, &sandbox)?.command, &cancelled)?;
     if !installed {
         if !install {
             return Err(cloud::Error::Install(format!(
@@ -74,9 +91,9 @@ pub(crate) fn add_device(
             .into());
         }
         report(cloud::Step::InstallingHerdr);
-        install::install(connect::gateway(&request, &sandbox)?.command, &cancelled)?;
+        install::install(connect::gateway(request, &sandbox)?.command, &cancelled)?;
         // The installer's own success is not proof the bridge will find it.
-        if !install::installed(connect::gateway(&request, &sandbox)?.command, &cancelled)? {
+        if !install::installed(connect::gateway(request, &sandbox)?.command, &cancelled)? {
             return Err(cloud::Error::Install(
                 "the installer finished but Herdr is not on the expected paths".into(),
             )
@@ -87,7 +104,7 @@ pub(crate) fn add_device(
         provider: CloudProvider::Daytona,
         id: sandbox.id,
         label: sandbox.name.clone(),
-        account: settings.base.clone(),
+        account: request.settings.base.clone(),
         machine: sandbox.name,
         session: SESSION.to_owned(),
         enabled: true,

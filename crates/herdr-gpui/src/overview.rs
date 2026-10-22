@@ -100,14 +100,17 @@ impl HerdrWindow {
     pub(crate) fn overview_rows(&self, cx: &App) -> Vec<Row> {
         let mut rows = Vec::new();
         for (index, endpoint) in self.endpoints.iter().enumerate() {
-            let selected = index == self.selected_endpoint;
-            let live = if selected { &self.live } else { &endpoint.live };
-            // The prefetch holds only the selected device's pull requests:
-            // another host may have the same checkout path and branch.
+            let live = if index == self.selected_endpoint {
+                &self.live
+            } else {
+                &endpoint.live
+            };
+            // Each device's answers are its own: another host may have the
+            // same checkout path and branch.
+            let view = self.endpoint_pr_view(index);
             let pr = |key: &str, branch: &str| {
-                selected
-                    .then(|| self.menu.pr_cache.peek(key, branch))
-                    .flatten()
+                view.as_ref()
+                    .and_then(|view| self.menu.pr_cache.peek(view, key, branch))
                     .map(|pr| model::Pr {
                         number: pr.number,
                         checks: pr.checks_outcome(),

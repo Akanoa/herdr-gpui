@@ -35,6 +35,7 @@ while let Ok(event) = client.events.recv() {
 connect(ConnectTarget, ConnectOptions) -> Result<Client>
 connect_with_surface_active(ConnectTarget, ConnectOptions, bool) -> Result<Client>
 load_saved_hosts(development: bool) -> Result<Vec<SavedHost>>
+store_saved_host(development: bool, host: &SavedHost) -> Result<SavedHost>
 load_saved_host_selection(development: bool) -> Result<(Vec<SavedHost>, Option<String>)>
 store_saved_host_selection(development: bool, selected: Option<&str>) -> Result<()>
 SavedHost { pub id: String, pub label: String, pub target: String, pub session: String, pub enabled: bool }
@@ -53,6 +54,14 @@ delete_remote_session(target: &str, name: &str) -> Result<()>
 ConnectOptions { surface_size: ClientSurfaceSize, cell_width_px: u32, cell_height_px: u32 }
 HostTheme { pub foreground: ClientHostColor, pub background: ClientHostColor, pub palette: [ClientHostColor; 256], pub appearance: ClientHostAppearance }
 ```
+
+`store_saved_host` atomically appends a validated profile without connecting to
+or provisioning the remote host. It preserves existing profiles and selection,
+enforces the catalog's count and byte limits, and returns the existing profile
+for an exact target/session duplicate. Callers check connectivity and resolve
+SSH aliases before saving. Calls are serialized within this process; Herdr's
+CLI does not participate in a shared catalog lock. Like the catalog loaders,
+this is blocking worker-only I/O.
 
 Session listing and deletion are blocking worker-only functions. Deletion
 requires explicit user confirmation: it delegates stopping the named session

@@ -119,7 +119,7 @@ fn ssh_repositories_are_keyed_by_destination_and_beads_by_main_root() {
 #[test]
 fn a_folder_outside_git_is_reported() {
     assert!(matches!(
-        parse(&ConnectTarget::Local, ""),
+        parse(&ConnectTarget::Local, "not-repository\n"),
         Err(Error::NotARepository)
     ));
 }

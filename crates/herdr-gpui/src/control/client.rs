@@ -52,6 +52,9 @@ pub(crate) struct Output {
     /// Output whose bytes matter, such as a patch: written unchanged into a
     /// pipe or file, and shown from `text` on a terminal.
     bytes: Option<Vec<u8>>,
+    /// Text for standard error besides, such as a remote command's, which
+    /// `--json` carries in `json` instead.
+    stderr: String,
 }
 
 impl Output {
@@ -63,6 +66,7 @@ impl Output {
             text,
             status: 0,
             bytes: None,
+            stderr: String::new(),
         }
     }
 
@@ -73,6 +77,7 @@ impl Output {
             json: serde_json::to_value(data)?,
             status: 0,
             bytes: None,
+            stderr: String::new(),
         })
     }
 
@@ -83,12 +88,26 @@ impl Output {
             json: serde_json::to_value(data)?,
             status: 0,
             bytes: Some(bytes),
+            stderr: String::new(),
         })
     }
 
     /// Done, but with nothing to report: exits [`exit::NOTHING`].
     pub(crate) fn nothing(mut self) -> Self {
         self.status = exit::NOTHING;
+        self
+    }
+
+    /// An answer that reports a failure, such as a batch where a device
+    /// failed: printed in full, exiting [`exit::REFUSED`].
+    pub(crate) fn failed(mut self) -> Self {
+        self.status = exit::REFUSED;
+        self
+    }
+
+    /// Also print `text` on standard error, unless `--json` asked.
+    pub(crate) fn with_stderr(mut self, text: impl Into<String>) -> Self {
+        self.stderr = text.into();
         self
     }
 }
@@ -324,33 +343,15 @@ fn finish(result: crate::Result<Output>, json: bool) -> ExitCode {
             println!("{}", output.json);
             ExitCode::from(output.status)
         }
-        Ok(Output {
-            bytes: Some(bytes),
-            status,
-            ..
-        }) if !std::io::stdout().is_terminal() => {
-            let mut stdout = std::io::stdout().lock();
-            if let Err(error) = stdout.write_all(&bytes).and_then(|()| stdout.flush()) {
-                eprintln!("{error}");
-                return ExitCode::from(exit::REFUSED);
+        Ok(output) => {
+            let status = print(&output);
+            if !output.stderr.is_empty() {
+                eprint!(
+                    "{}",
+                    for_terminal(&output.stderr, std::io::stderr().is_terminal())
+                );
             }
             ExitCode::from(status)
-        }
-        Ok(output) => {
-            if !output.text.is_empty() {
-                if output.status == exit::NOTHING {
-                    eprintln!(
-                        "{}",
-                        for_terminal(&output.text, std::io::stderr().is_terminal())
-                    );
-                } else {
-                    println!(
-                        "{}",
-                        for_terminal(&output.text, std::io::stdout().is_terminal())
-                    );
-                }
-            }
-            ExitCode::from(output.status)
         }
         Err(error) => {
             let message = crate::notifications::safe_text(&error.to_string(), 4096);
@@ -365,6 +366,34 @@ fn finish(result: crate::Result<Output>, json: bool) -> ExitCode {
             ExitCode::from(status(&error))
         }
     }
+}
+
+/// Prints successful output as text; the exit status.
+fn print(output: &Output) -> u8 {
+    if let Some(bytes) = &output.bytes
+        && !std::io::stdout().is_terminal()
+    {
+        let mut stdout = std::io::stdout().lock();
+        if let Err(error) = stdout.write_all(bytes).and_then(|()| stdout.flush()) {
+            eprintln!("{error}");
+            return exit::REFUSED;
+        }
+        return output.status;
+    }
+    if !output.text.is_empty() {
+        if output.status == exit::NOTHING {
+            eprintln!(
+                "{}",
+                for_terminal(&output.text, std::io::stderr().is_terminal())
+            );
+        } else {
+            println!(
+                "{}",
+                for_terminal(&output.text, std::io::stdout().is_terminal())
+            );
+        }
+    }
+    output.status
 }
 
 /// Runs a control command without starting GPUI.
@@ -406,6 +435,7 @@ pub(crate) fn run(invocation: Invocation) -> ExitCode {
         ControlCommand::Devices => tabs::devices(&context),
         ControlCommand::Orchestrator(command) => tabs::orchestrator(command, &context),
         ControlCommand::Review => tabs::review(&context),
+        ControlCommand::Px0 => tabs::px0(&context),
         ControlCommand::Notes(command) => work::notes(command, &context),
         ControlCommand::Feedback { wait } => browser::feedback(wait, &context),
         ControlCommand::Checkpoint(command) => work::checkpoint(command, &context),

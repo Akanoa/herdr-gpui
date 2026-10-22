@@ -53,7 +53,12 @@ impl HerdrWindow {
     /// The saved SSH device whose own account the GitHub page manages, when
     /// that device is selected. Local and explicit sockets use the main account.
     fn github_host(&self) -> Option<&str> {
-        let endpoint = &self.endpoints[self.selected_endpoint];
+        self.endpoint_github_host(self.selected_endpoint)
+    }
+
+    /// [`Self::github_host`] for any device, selected or not.
+    fn endpoint_github_host(&self, index: usize) -> Option<&str> {
+        let endpoint = self.endpoints.get(index)?;
         matches!(endpoint.connection.target, ConnectTarget::Ssh { .. })
             .then_some(endpoint.id.as_str())
             .filter(|id| self.menu.github_hosts.contains_key(*id))
@@ -101,7 +106,12 @@ impl HerdrWindow {
     /// The account pull requests on the selected device are read with: the
     /// device's own sign-in when it has one, otherwise the main account.
     pub(crate) fn pr_profile(&self) -> Option<&Profile> {
-        self.github_host()
+        self.endpoint_pr_profile(self.selected_endpoint)
+    }
+
+    /// [`Self::pr_profile`] for any device, selected or not.
+    pub(crate) fn endpoint_pr_profile(&self, index: usize) -> Option<&Profile> {
+        self.endpoint_github_host(index)
             .and_then(|id| self.menu.github_hosts.get(id)?.profile.as_ref())
             .or(self.menu.github.profile.as_ref())
     }

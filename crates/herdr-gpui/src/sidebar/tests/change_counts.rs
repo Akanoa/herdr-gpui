@@ -24,7 +24,7 @@ fn counts(
     let marks = crate::teleport::Marks::detached();
     workspace_badge(
         workspace,
-        Some(cache),
+        Some((cache, &crate::pull_request::View::default())),
         (Some(git), mode),
         (&marks, crate::endpoint::LOCAL),
         None,

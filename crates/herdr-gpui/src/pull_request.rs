@@ -22,7 +22,7 @@ pub(crate) use {
         repository_input, workspace_input,
     },
     remote::{Base, Remote, base_repository},
-    store::Shared,
+    store::{Shared, View},
 };
 
 pub(crate) use fetch::{by_number, local_repository, repository_key};

@@ -40,7 +40,7 @@ fn worktree_rows_wear_their_cached_pull_request(cx: &mut gpui::TestAppContext) {
                 value.state = crate::pull_request::State::from(state.to_owned());
                 value.additions = additions;
                 value.deletions = deletions;
-                view.menu.pr_cache.seed(
+                view.seed_pr(
                     crate::pull_request::Input {
                         checkout: None,
                         repo_key: Some(key.into()),
@@ -116,7 +116,7 @@ fn worktree_rows_mark_uncommitted_work(cx: &mut gpui::TestAppContext) {
             };
             // A checkout with a pull request and uncommitted work, and one that
             // only has uncommitted work.
-            view.menu.pr_cache.seed(
+            view.seed_pr(
                 input("worktree/sidebar-child"),
                 crate::pull_request::fixture().unwrap(),
                 now,

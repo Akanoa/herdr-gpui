@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 
 mod actions;
 mod beads;
+mod beads_only;
 mod e2e;
 mod fake_github;
 mod full_listing;
@@ -13,8 +14,13 @@ mod incremental;
 mod keys;
 mod location;
 mod naming;
+mod project_fixtures;
 mod prompt;
 mod repo;
+mod repo_output;
+#[cfg(unix)]
+mod repo_script;
+mod restart;
 mod retry;
 mod service;
 mod store;

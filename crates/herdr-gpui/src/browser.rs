@@ -19,6 +19,7 @@ mod code;
 mod code_group;
 mod code_start;
 mod code_view;
+mod editor;
 #[cfg(any(target_os = "macos", windows))]
 mod favicon;
 mod feedback;
@@ -44,6 +45,7 @@ mod parking;
 mod popup;
 #[cfg(any(target_os = "macos", windows))]
 mod preview;
+mod px0;
 #[cfg(target_os = "macos")]
 mod snapshot;
 #[cfg(target_os = "macos")]
@@ -62,6 +64,7 @@ mod zoom;
 #[cfg(any(target_os = "macos", windows))]
 pub(crate) use annotate_view::Annotations;
 pub(crate) use closed::ClosedHerdrTab;
+pub(crate) use editor::Editor;
 pub(crate) use feedback::{Batch, Feedback, FeedbackKey};
 pub(crate) use feedback::{TAKE_BUDGET, json_size};
 pub(crate) use group_motion::Fold;

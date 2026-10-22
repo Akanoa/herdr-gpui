@@ -48,10 +48,12 @@ pub enum EventKind {
     Note,
     /// A host's connection status changed.
     Host,
+    /// A batch of cloud machines moved on: asked, running, done, cancelled.
+    CloudBatch,
 }
 
 impl EventKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: &[Self] = &[
         Self::WindowOpened,
         Self::WindowClosed,
         Self::WindowFocused,
@@ -60,6 +62,7 @@ impl EventKind {
         Self::Feedback,
         Self::Note,
         Self::Host,
+        Self::CloudBatch,
     ];
 
     pub fn name(self) -> &'static str {
@@ -72,6 +75,7 @@ impl EventKind {
             Self::Feedback => "feedback",
             Self::Note => "note",
             Self::Host => "host",
+            Self::CloudBatch => "cloud_batch",
         }
     }
 }
@@ -81,7 +85,8 @@ impl std::str::FromStr for EventKind {
 
     fn from_str(text: &str) -> Result<Self, ()> {
         Self::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|kind| kind.name() == text.replace('-', "_"))
             .ok_or(())
     }

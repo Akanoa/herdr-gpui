@@ -55,6 +55,8 @@ mod local_counts_chip;
 #[cfg(test)]
 mod nested_agents;
 #[cfg(test)]
+mod other_device_prs;
+#[cfg(test)]
 mod palette;
 #[cfg(test)]
 mod palette_header;
@@ -106,6 +108,8 @@ mod update_panel;
 mod workspace_click_hover;
 #[cfg(test)]
 mod workspace_menu;
+#[cfg(test)]
+mod workspace_menu_name;
 #[cfg(test)]
 mod worktree_note_trunk;
 #[cfg(test)]
@@ -369,13 +373,16 @@ impl PaintedText {
         let layout = look.density;
         // Menu labels share text keys, and retained paint probes can still
         // describe the previous layout. Compute the sidebar column directly.
+        // The child row draws no fold chevron, so its label also takes the
+        // chevron's column.
         let left =
             px(bar + look.content_x() + layout.child_indent() + super::STATUS_WIDTH + layout.gap());
+        // A worktree group's member draws no chevron, so its name also
+        // takes the arrow column.
         let width = px(look.content_width(super::SIDEBAR_WIDTH)
             - super::STATUS_WIDTH
             - layout.gap()
-            - layout.child_indent()
-            - super::ARROW_RESERVE);
+            - layout.child_indent());
         ensure!(
             near(self.bounds.left(), left),
             "child label left: actual {:?}, expected {left:?}",
@@ -458,7 +465,9 @@ pub(crate) fn snapshot(workspace_count: usize) -> ClientShellSnapshot {
         })).collect::<Vec<_>>(),
         "panes": [], "commands": [],
         "workspaces": (0..workspace_count).map(|i| serde_json::json!({
-            "workspace_id": format!("w{i}"), "active_tab_id": "t0", "new_workspace_cwd": "/tmp",
+            "workspace_id": format!("w{i}"), "active_tab_id": "t0",
+            // The main checkout's shell stands in its repository, as Herdr opens it.
+            "new_workspace_cwd": if i == 3 { REPO_KEY.trim_end_matches("/.git") } else { "/tmp" },
             "number": i + 1,
             "label": match i { 0 => "herdr", 1 => "herdr-gpui-sidebar-rendering-regression-investigation", 3..=5 => "agent-launcher", _ => "another workspace" },
             "custom_label": false,
@@ -588,6 +597,7 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         deliveries: Default::default(),
         terminal_notes: Default::default(),
         notes_width: crate::panel_resize::NOTES,
+        notice_overflow: Default::default(),
         review_files_width: crate::panel_resize::REVIEW_FILES,
         reviews: Default::default(),
         code_views: Default::default(),
@@ -662,6 +672,7 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         terminal_mouse: None,
         scrollbar_drag: None,
         security: Default::default(),
+        security_search: crate::security::SecuritySearch::new(cx),
         split_drag: None,
         split_cursor: None,
         pending_images: Vec::new(),

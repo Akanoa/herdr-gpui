@@ -16,10 +16,12 @@ mod list;
 mod listing;
 mod look;
 mod markdown;
+pub(crate) mod pane;
 mod pills;
 mod pull;
 mod repo;
 mod rows;
+mod status;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -27,6 +29,7 @@ mod tests;
 
 pub(crate) use look::Look;
 pub(crate) use markdown::without_html;
+use pane::{PANE_DEFAULT, PaneDrag, Resize};
 pub(crate) use repo::RepoSpec;
 pub(crate) use rows::{LiveAgent, Tab as List, key_label};
 
@@ -37,7 +40,7 @@ use repo::Repo;
 pub(crate) use rows::Tab;
 use rows::{Filters, Runs, Sort};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -75,12 +78,8 @@ pub(crate) enum Event {
 
 impl EventEmitter<Event> for OrchestratorView {}
 
-/// The details pane's width bounds, in pixels, and its share of the view.
 /// How long Refresh spins before the workers' own sync states take over.
 const REFRESH_GRACE: Duration = Duration::from_millis(1500);
-const PANE_MIN: f32 = 360.;
-const PANE_DEFAULT: f32 = 520.;
-const PANE_MAX_SHARE: f32 = 0.7;
 
 /// The detail page of one item.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,20 +127,12 @@ impl DetailTab {
     }
 }
 
-/// The details pane's drag handle, as a drag payload.
-#[derive(Clone, Copy)]
-pub(crate) struct PaneDrag;
-
-impl Render for PaneDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        Empty
-    }
-}
-
 pub(crate) struct OrchestratorView {
     /// Every repository listed, and the one the open item, the selection,
     /// and the dialogs belong to.
     repos: Vec<Repo>,
+    /// Non-project folders already checked; retried on Refresh or after removal.
+    skipped_repos: HashSet<String>,
     active: usize,
     /// What a view without a repository reads.
     blank: Snapshot,
@@ -179,6 +170,9 @@ pub(crate) struct OrchestratorView {
     scroll: UniformListScrollHandle,
     /// The shown list's lines: headings and rows.
     lines: Vec<rows::Line>,
+    /// Every repository listing each shown item, by its key: one item, such
+    /// as a GitHub issue two checkouts read, is one row.
+    holders: HashMap<String, Vec<usize>>,
     /// Whether the shown list mixes backends, so rows mark their source.
     mixed_sources: bool,
     /// The open item's description, parsed once per change of its text.
@@ -230,6 +224,7 @@ impl OrchestratorView {
         });
         Self {
             repos: Vec::new(),
+            skipped_repos: HashSet::new(),
             active: 0,
             blank: Snapshot::default(),
             backends: HashSet::new(),
@@ -256,6 +251,7 @@ impl OrchestratorView {
             scroll: UniformListScrollHandle::new(),
             lines: Vec::new(),
             mixed_sources: false,
+            holders: HashMap::new(),
             description: markdown::Markdown::default(),
             dialog: None,
             confirm: None,
@@ -295,6 +291,15 @@ impl OrchestratorView {
         self.projects.iter().cloned().collect()
     }
 
+    /// Whether detection found the checkout `key` names outside Git, for
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn outside_git(&self, key: &str) -> bool {
+        self.repos
+            .iter()
+            .any(|repo| repo.key == key && repo.outside_git())
+    }
+
     /// The shown repository's last worker snapshot, for tests.
     #[cfg(test)]
     pub(crate) fn repo_snapshot_for_tests(&self) -> Snapshot {
@@ -329,6 +334,7 @@ impl OrchestratorView {
             }
         }
         if read {
+            self.discard_non_projects();
             self.reconcile_agents();
             self.refresh_rows();
             self.follow_pull_request();
@@ -530,6 +536,7 @@ impl OrchestratorView {
     }
 
     fn refresh(&mut self) {
+        self.skipped_repos.clear();
         for repo in &self.repos {
             if let Some(service) = &repo.service {
                 service.refresh(repo.request.token.clone());
@@ -574,8 +581,12 @@ impl OrchestratorView {
     fn select_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.tab = tab;
         self.selected = None;
+        // The open item belongs to the list left behind.
+        self.detail = None;
+        self.merge_open = false;
         self.sort_open = false;
         self.refresh_rows();
+        self.follow_pull_request();
         cx.notify();
     }
 
@@ -777,7 +788,6 @@ impl Render for OrchestratorView {
         let body = self.render_inbox(window, cx);
         let notice = self.render_notice(cx);
         let overlay = self.render_overlay(cx);
-        let merge_menu = self.render_merge_menu(cx);
         let look = &self.look;
         div()
             .id("orchestrator")
@@ -804,7 +814,6 @@ impl Render for OrchestratorView {
             )
             .children(notice)
             .child(body)
-            .children(merge_menu)
             .children(overlay)
     }
 }

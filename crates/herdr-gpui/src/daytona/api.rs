@@ -134,6 +134,14 @@ impl Request<'_> {
         self.post_empty("start_sandbox", &format!("/sandbox/{}/start", segment(id)?))
     }
 
+    /// Delete the sandbox for good. One already gone is deleted.
+    pub(crate) fn destroy(&self, id: &str) -> Result<()> {
+        match self.delete("delete_sandbox", &format!("/sandbox/{}", segment(id)?)) {
+            Err(Error::Status(super::Status { code: 404, .. })) => Ok(()),
+            result => result,
+        }
+    }
+
     pub(crate) fn ssh_access(&self, id: &str) -> Result<SshAccess> {
         self.post(
             "ssh_access",

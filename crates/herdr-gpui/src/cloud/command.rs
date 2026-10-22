@@ -21,37 +21,7 @@ pub(crate) fn with_command<T>(
             super::Error::Cancelled,
         ));
     }
-    match provider {
-        #[cfg(feature = "azure")]
-        CloudProvider::Azure => {
-            let command =
-                crate::azure::command(account, id, cancelled).map_err(io::Error::other)?;
-            Ok(run(command))
-        }
-        #[cfg(feature = "boat")]
-        CloudProvider::Boat => {
-            let gateway = crate::boat::command(account, id, cancelled).map_err(io::Error::other)?;
-            Ok(gateway.with_command(run))
-        }
-        #[cfg(feature = "coder")]
-        CloudProvider::Coder => {
-            let command =
-                crate::coder::command(account, id, cancelled).map_err(io::Error::other)?;
-            Ok(run(command))
-        }
-        #[cfg(feature = "daytona")]
-        CloudProvider::Daytona => {
-            let gateway =
-                crate::daytona::command(account, id, cancelled).map_err(io::Error::other)?;
-            Ok(gateway.with_command(run))
-        }
-        #[cfg(feature = "railway")]
-        CloudProvider::Railway => {
-            let command =
-                crate::railway::command(account, id, cancelled).map_err(io::Error::other)?;
-            Ok(run(command))
-        }
-    }
+    super::providers::run_command(provider, account, id, cancelled, run)
 }
 
 #[cfg(test)]

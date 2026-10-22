@@ -4,6 +4,7 @@ pub(crate) mod api;
 pub(crate) mod cleanup;
 pub(crate) mod cli;
 pub(crate) mod connect;
+pub(crate) mod create;
 pub(crate) mod destroy;
 pub(crate) mod error;
 pub(crate) mod gateway;

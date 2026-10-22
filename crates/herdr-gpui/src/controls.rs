@@ -79,6 +79,7 @@ pub enum Command {
     InstallBrowserSkill,
     SplitEditor,
     OpenCode,
+    OpenPx0,
     ToggleFullScreen,
     CycleWindows,
     /// Closes the window it runs in, leaving the daemon and its terminals.
@@ -666,6 +667,11 @@ pub const COMMANDS: &[CommandInfo] = &[
         label: "Open VS Code",
     },
     CommandInfo {
+        command: Command::OpenPx0,
+        name: "open_px0",
+        label: "Open px0",
+    },
+    CommandInfo {
         command: Command::ToggleFullScreen,
         name: "toggle_full_screen",
         label: "Toggle Full Screen",
@@ -856,6 +862,7 @@ pub fn request(command: Command, snapshot: &ClientShellSnapshot) -> Option<(Meth
         | Command::InstallBrowserSkill
         | Command::SplitEditor
         | Command::OpenCode
+        | Command::OpenPx0
         | Command::ToggleFullScreen
         | Command::CycleWindows
         | Command::CloseWindow

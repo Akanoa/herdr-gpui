@@ -9,11 +9,13 @@ use std::{cell::RefCell, rc::Rc, time::Instant};
 pub(super) const CACHE_LIMIT: usize = 128;
 
 /// Whose lookups an entry is: the device the checkout is on and the GitHub
-/// account that read it. A window shows and refreshes only its own view's.
+/// account that read it. A window refreshes only its selected device's view,
+/// and each device's rows show their own view's answers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct View {
-    pub(super) origin: Origin,
-    pub(super) login: String,
+pub(crate) struct View {
+    pub(crate) origin: Origin,
+    /// The account set's key, as [`crate::github::Tokens::key`] gives it.
+    pub(crate) login: String,
 }
 
 pub(super) struct Entry {

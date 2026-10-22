@@ -3,6 +3,7 @@
 //! flat form; every other family sends `{"method", "caller", "op"}` with a
 //! family-specific `op`, and is answered with a family-specific `reply`.
 pub(crate) mod app;
+pub(crate) mod cloud;
 pub(crate) mod events;
 pub(crate) mod hosts;
 pub(crate) mod settings;
@@ -14,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 /// Raised whenever a request or reply changes shape, so `status` can tell
 /// an outdated app from a refused request. 3: `browser.open` placement.
-/// 4: `link`. 5: the `tab` family's `zoom`.
-pub(crate) const PROTOCOL_VERSION: u32 = 5;
+/// 4: `link`. 5: the `tab` family's `zoom`. 6: the `cloud` family.
+pub(crate) const PROTOCOL_VERSION: u32 = 6;
 
 /// Older apps and clients know only tabs, so a tab is left off the wire.
 fn is_tab(placement: &Placement) -> bool {
@@ -61,6 +62,8 @@ pub(crate) enum Request {
     Events(Call<events::EventsOp>),
     #[serde(rename = "link")]
     Link(Call<LinkOp>),
+    #[serde(rename = "cloud")]
+    Cloud(Call<cloud::CloudOp>),
 }
 
 /// A `herdr-gpui://` link the shell started a second copy of the app with.
@@ -89,6 +92,7 @@ impl Request {
             Self::Tab(call) => call.op.wait_seconds(),
             Self::Host(call) => call.op.wait_seconds(),
             Self::Settings(call) => call.op.wait_seconds(),
+            Self::Cloud(call) => call.op.wait_seconds(),
             _ => 0,
         };
         wait.min(MAX_WAIT_SECONDS)
@@ -239,6 +243,9 @@ pub(crate) enum Response {
     },
     Events {
         reply: events::Reply,
+    },
+    Cloud {
+        reply: cloud::Reply,
     },
     Error {
         code: ErrorCode,

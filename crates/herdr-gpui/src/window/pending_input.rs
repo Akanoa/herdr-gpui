@@ -5,7 +5,8 @@
 //! held input leaves only for the target that was focused when the gap opened.
 //! Keys, pastes, and file drops share one queue, so they arrive in the order
 //! the user made them. A WSL drop whose paths are still being mapped holds
-//! input the same way, so keys typed after it land after it.
+//! input the same way, so keys typed or held after it land after it, and are
+//! discarded if its paths are not pasted.
 //!
 //! A drop that starts a remote file copy ends the batch, because its paths are
 //! pasted only when the copy completes; so does a paste of files copied in
@@ -427,13 +428,18 @@ impl HerdrWindow {
                 Held::FrameReturned => Delivery::Queued,
             };
             match delivery {
-                Delivery::Queued => {}
-                Delivery::Preparing => {
+                Delivery::Queued if self.wsl_paste.is_none() => {}
+                // A WSL drop queues its paths only once they are mapped, so
+                // the input after it waits for them, as it does behind a
+                // background preparation.
+                Delivery::Queued | Delivery::Preparing => {
                     // Input held during this delivery joins the back.
                     let mut waiting: VecDeque<Held> = held.collect();
                     waiting.append(&mut self.pending_input.events);
                     self.pending_input.events = waiting;
-                    self.pending_input.behind = self.newest_preparation();
+                    if delivery == Delivery::Preparing {
+                        self.pending_input.behind = self.newest_preparation();
+                    }
                     return;
                 }
                 Delivery::Copying | Delivery::Refused => {
@@ -481,7 +487,7 @@ impl HerdrWindow {
     }
 
     /// Drop everything held, after the reason shown for `delivery`.
-    fn discard_all_held(&mut self, delivery: Delivery, cx: &mut Context<Self>) {
+    pub(super) fn discard_all_held(&mut self, delivery: Delivery, cx: &mut Context<Self>) {
         let remaining = self
             .pending_input
             .events

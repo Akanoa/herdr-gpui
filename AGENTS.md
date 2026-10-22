@@ -99,8 +99,11 @@ agents in Herdr panes can use what only this client shows or keeps
 - Do not add a command that repeats Herdr's own `herdr` CLI (workspaces,
   terminal tabs, panes, agents, scrollback), that the app cannot really do,
   or that skips a confirmation. Destructive or outward actions open the
-  app's own dialog, pointed at the caller's checkout, and the user confirms
-  there.
+  app's own dialog, pointed at the caller's checkout or the machines named,
+  and the user confirms there; a batch of them is confirmed once. The one
+  exception is `cloud exec`, a command on a cloud machine the user saved,
+  which is the agent's own work and asks nothing, as the agent's shell does
+  not.
 - Keep the shared contract: `--json` and `--window` on every command, the
   exit-code table in `docs/cli.md`, bounded requests and responses, and
   targeting that refuses rather than acting in another session's window.

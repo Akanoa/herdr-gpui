@@ -10,6 +10,7 @@
 //! here blocks, so it runs on background workers.
 
 mod connect;
+pub(crate) mod create;
 mod error;
 mod first_use;
 mod keys;

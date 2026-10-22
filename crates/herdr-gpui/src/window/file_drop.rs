@@ -80,14 +80,20 @@ impl HerdrWindow {
         .then_some(DropAt::Point(position))
     }
 
-    /// Paste held files once the frame is ready; a drop point that lands on
-    /// nothing in that frame is reported.
+    /// Paste held files once the frame is ready; an open menu, or a drop
+    /// point that lands on nothing in that frame, is reported.
     pub(super) fn deliver_held_drop(
         &mut self,
         at: DropAt,
         paths: &[PathBuf],
         cx: &mut Context<Self>,
     ) -> Delivery {
+        // A menu opened during the gap owns input, as it does for a paste.
+        if self.menu.page.is_some() {
+            self.local_error = Some("Files not pasted: a menu is open".into());
+            cx.notify();
+            return Delivery::Refused;
+        }
         let target = match at {
             DropAt::Pane(target) => Some(target),
             DropAt::Point(position) => self.pane_under_drop(position),

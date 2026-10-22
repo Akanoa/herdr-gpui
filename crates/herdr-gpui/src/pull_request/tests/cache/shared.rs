@@ -21,7 +21,11 @@ fn windows_on_the_same_checkouts_ask_github_once_and_share_the_answer() {
     assert!(second.cache.loading(&feature, now));
     first.complete(now, Ok(Some(fixture().unwrap())), None);
     assert_eq!(
-        second.cache.peek("/repo/.git", "feature").unwrap().number,
+        second
+            .cache
+            .peek(&local(), "/repo/.git", "feature")
+            .unwrap()
+            .number,
         8
     );
     second.cache.schedule([feature.clone()], now);
@@ -72,7 +76,12 @@ fn signing_out_forgets_only_that_accounts_answers() {
         .scope((0, 1, "boot".into()), token, "someone-else", Origin::Local);
     second.cache.seed(input("theirs"), fixture().unwrap(), now);
     first.cache.clear();
-    assert!(second.cache.peek("/repo/.git", "theirs").is_some());
+    assert!(
+        second
+            .cache
+            .peek(&second.cache.view, "/repo/.git", "theirs")
+            .is_some()
+    );
     assert!(
         first
             .cache

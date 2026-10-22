@@ -508,7 +508,7 @@ impl HerdrWindow {
                         | Page::VersionMismatch
                         | Page::OpenCheckout
                         | Page::OpenLink
-                ),
+                ) || self.cloud_batch_open(),
                 |panel| {
                     panel
                         .w((viewport.width - px(24.)).max(px(0.)).min(px(420.)))
@@ -672,6 +672,8 @@ impl HerdrWindow {
             panel = panel.child(self.render_worktree_script(cx));
         } else if page == Page::OpenLink {
             panel = panel.child(self.render_open_link(cx));
+        } else if let Some(body) = self.cloud_batch_page(cx) {
+            panel = panel.child(body);
         } else if page == Page::OpenCheckout {
             panel = panel.child(self.render_open_checkout(cx));
         } else if page == Page::Install {

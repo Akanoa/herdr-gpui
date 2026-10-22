@@ -17,7 +17,10 @@ mod local_network;
 #[cfg(feature = "cloud")]
 mod rail;
 #[cfg(unix)]
+mod setup_activation;
+#[cfg(unix)]
 mod setup_workspace;
+mod version_warning;
 
 #[test]
 fn only_a_present_herdr_is_saved_without_a_terminal() {
@@ -33,7 +36,7 @@ fn only_a_present_herdr_is_saved_without_a_terminal() {
         Offer::for_probe(HostProbe::SshFailed(herdr_client::SshFailure::Auth)),
         Some(Offer::InstallKey)
     );
-    let question = Offer::Install.question("dev@box");
+    let question = Offer::Install.question("dev@box", Some("dev"));
     if cfg!(windows) {
         // No terminal setup: the user is told what to run instead.
         assert!(question.contains("Herdr was not detected there"));
