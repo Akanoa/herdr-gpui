@@ -56,6 +56,12 @@ impl HerdrWindow {
     }
 
     pub(crate) fn resize_at(&mut self, now: Instant) {
+        // Herdr refuses the tab claim below from a connection whose surface is
+        // inactive, as a newly selected endpoint's is until the poll queues
+        // its activation. That activation sends the window's size itself.
+        if !self.endpoints[self.selected_endpoint].surface_requested() {
+            return;
+        }
         // Another client (a CLI, or another window) can resize the tab the
         // window shows. The window's own options still hold, so the early
         // return below would leave a frame that no longer matches them. An
