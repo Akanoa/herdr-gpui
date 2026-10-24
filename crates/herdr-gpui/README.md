@@ -3134,6 +3134,17 @@ installed: `claude`, `codex` and `pi` (which `herdr-acp` drives without an
 ACP adapter), `copilot --acp`, `gemini --acp`, or `opencode acp`. The program can
 also be started by hand in any pane: `herdr-acp claude`.
 
+**One click.** Each tab strip also offers a button per installed agent that
+starts its chat in a new tab of that group; the chat's tab looks like any
+other, and **+** still opens a terminal tab. Each button takes the shape
+the tab layout gives **+**. `[chat] launcher` places the buttons: `plus`
+(the default) deals them out from under **+** while the pointer is over it,
+to the right, or to the left when the window has no room there, `beside` keeps them right after **+**, `leading` puts them before
+the tabs, `trailing` at the strip's right end, and `button` shows one named
+button for the agent last started, the others sliding out beside it; `off`
+hides them. Settings > General picks one while ACP chats are on, and
+`herdr-gpui config set chat.launcher beside` sets it from a script.
+
 **Company endpoints.** Variables in `[chat.env]` go into the environment of
 every chat's tab, on this machine or an SSH host: `GH_HOST` for Copilot on
 GitHub Enterprise, `ANTHROPIC_BASE_URL` for a gateway, and so on. Settings >
