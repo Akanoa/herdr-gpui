@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod envrc;
+pub mod oauth;
 pub mod saved;
 
 use super::{Activity, Checkpoint, Item, ItemKey, Provider, SourceKey};
@@ -93,6 +94,10 @@ pub enum Error {
     RateLimit,
     #[error("GitLab request failed (HTTP {0})")]
     Status(u16),
+    #[error("GitLab's sign-in was declined")]
+    Denied,
+    #[error("The GitLab sign-in code expired; connect again")]
+    CodeExpired,
     #[error("{0:?} is not a GitLab host name")]
     Host(String),
     #[error(
@@ -136,9 +141,22 @@ pub struct Config {
     /// Saves pasted tokens in the private `0600` `gitlab-credentials` file
     /// when no desktop keyring is running. Same meaning as `[github]`'s.
     pub allow_plaintext_credentials: bool,
+    /// The OAuth application ID that connects accounts on a self-managed
+    /// instance, by instance (`"gitlab.example.com" = "<id>"`). gitlab.com
+    /// uses Herdr UI's own unless one is set here.
+    pub applications: std::collections::BTreeMap<String, String>,
 }
 
 impl Config {
+    /// The OAuth application that connects accounts on `instance`, if any.
+    pub fn application(&self, instance: &str) -> Option<&str> {
+        self.applications
+            .iter()
+            .find(|(host, _)| saved::normalize_host(host).as_deref() == Some(instance))
+            .map(|(_, application)| application.as_str())
+            .or_else(|| (instance == DEFAULT_HOST).then_some(oauth::GITLAB_COM_APPLICATION))
+    }
+
     /// Where pasted tokens are saved.
     pub fn store(&self) -> herdr_credentials::Store {
         herdr_credentials::Store::for_policy(self.allow_plaintext_credentials)

@@ -11,11 +11,12 @@ use herdr_orchestrator::gitlab::{
     self, Api, Scheme,
     account::{self, Source},
     cli_hosts::{self, CliHost},
-    saved,
+    saved::{self, Kept, Saved},
 };
 use secrecy::SecretString;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
+mod connect;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -23,7 +24,7 @@ mod tests;
 /// gitlab.com, listed when no repository names another instance.
 const DEFAULT_HOST: &str = "gitlab.com";
 /// What a save or forget says in a window that keeps no saved credential.
-const NO_STORE: &str = "This window does not keep GitLab tokens.";
+pub(super) const NO_STORE: &str = "This window does not keep GitLab tokens.";
 
 /// What is known of an instance's token.
 pub(crate) enum Token {
@@ -47,6 +48,11 @@ pub(crate) struct HostStatus {
     /// A token is saved for the instance, so Forget is offered even while an
     /// `.envrc` or `GITLAB_TOKEN` takes precedence over it.
     pub(crate) saved: bool,
+    /// What is saved is an account connected with OAuth, which Disconnect
+    /// removes.
+    pub(crate) connected: bool,
+    /// An OAuth application connects accounts on the instance.
+    pub(crate) can_connect: bool,
     /// The folder name of the checkout whose `.envrc` was asked, if any.
     pub(crate) checkout: Option<String>,
     pub(crate) token: Token,
@@ -83,14 +89,17 @@ pub(crate) struct GitLabMenu {
     /// The save or forget under way. Kept apart from lookups, which reopening
     /// the page starts again, so its result is still shown and acted on.
     _save: Option<Task<()>>,
+    /// An account being connected with OAuth.
+    pub(crate) connecting: Option<connect::Connecting>,
 }
 
 /// Where a token came from, as the page says it.
-fn source_label(source: Source, checkout: Option<&str>) -> String {
-    match (source, checkout) {
+fn source_label(source: Source, status: &HostStatus) -> String {
+    match (source, status.checkout.as_deref()) {
         (Source::Envrc, Some(checkout)) => format!("from the .envrc of {checkout}"),
         (Source::Envrc, None) => "from the project's .envrc".to_owned(),
         (Source::Environment, _) => "from GITLAB_TOKEN".to_owned(),
+        (Source::Saved, _) if status.connected => "connected here".to_owned(),
         (Source::Saved, _) => "saved here".to_owned(),
         (Source::Cli, _) => "from the GitLab CLI (glab)".to_owned(),
     }
@@ -105,6 +114,10 @@ pub(crate) fn status_line(status: &HostStatus) -> String {
     }
     let (source, user) = match &status.token {
         Token::Unknown => return "Looking for a token\u{2026}".to_owned(),
+        Token::None if status.can_connect => {
+            return "Not connected. Public projects still list; connect for private ones."
+                .to_owned();
+        }
         Token::None => {
             return "No token. Public projects still list; set GITLAB_TOKEN in the project's \
                     .envrc, sign in with glab, or paste a token below for private ones."
@@ -112,11 +125,14 @@ pub(crate) fn status_line(status: &HostStatus) -> String {
         }
         Token::Found { source, user } => (*source, user),
     };
-    let from = source_label(source, status.checkout.as_deref());
+    let from = source_label(source, status);
     match user {
         None => format!("Checking the token {from}\u{2026}"),
         Some(Ok(user)) => format!("Signed in as {user}, {from}."),
         Some(Err(error)) => match **error {
+            gitlab::Error::Authentication if status.can_connect => {
+                format!("GitLab refused the token {from}. Connect again, or paste a new one below.")
+            }
             gitlab::Error::Authentication => {
                 format!("GitLab refused the token {from}. Paste a new one below.")
             }
@@ -183,7 +199,7 @@ pub(crate) fn merge_hosts(
 
 /// An instance's token and whom it signs in as. Blocks on direnv, `glab`,
 /// and the network: run it off the UI thread.
-fn check_host(listed: &Listed, saved: Option<SecretString>) -> Token {
+fn check_host(listed: &Listed, saved: impl FnOnce() -> Option<SecretString>) -> Token {
     let api = &listed.api;
     match account::lookup_with(&api.instance, saved, listed.checkout.as_deref()) {
         Some(found) => Token::Found {
@@ -239,7 +255,7 @@ impl HerdrWindow {
 
     /// The store saved tokens live in, or `None` in a headless window, which
     /// touches no saved credential.
-    fn gitlab_store(&self) -> Option<herdr_credentials::Store> {
+    pub(super) fn gitlab_store(&self) -> Option<herdr_credentials::Store> {
         self.reads_credentials().then(|| self.config.gitlab.store())
     }
 
@@ -259,14 +275,12 @@ impl HerdrWindow {
         let Some(store) = self.gitlab_store() else {
             self.menu.gitlab._task = None;
             self.menu.gitlab.problem = None;
-            self.show_gitlab_hosts(&merge_hosts(listed, [], &[]), |_| false, || Token::None);
+            self.show_gitlab_hosts(&merge_hosts(listed, [], &[]), None, || Token::None);
             return;
         };
-        self.show_gitlab_hosts(
-            &merge_hosts(listed.clone(), [], &[]),
-            |_| false,
-            || Token::Unknown,
-        );
+        self.show_gitlab_hosts(&merge_hosts(listed.clone(), [], &[]), None, || {
+            Token::Unknown
+        });
         let read = cx.background_spawn(async move { (saved::read(store), cli_hosts::read()) });
         self.menu.gitlab._task = Some(cx.spawn(async move |this, cx| {
             let (saved, cli) = read.await;
@@ -279,13 +293,13 @@ impl HerdrWindow {
                 });
                 let saved = saved.unwrap_or_default();
                 let hosts = merge_hosts(listed, saved.hosts().map(str::to_owned), &cli);
-                this.show_gitlab_hosts(&hosts, |host| saved.get(host).is_some(), || Token::Unknown);
+                this.show_gitlab_hosts(&hosts, Some(&saved), || Token::Unknown);
                 this.menu.gitlab._lookups = hosts
                     .into_values()
                     .filter(|listed| listed.api.scheme == Scheme::Https)
                     .map(|listed| {
-                        let token = saved.get(&listed.api.instance).cloned();
-                        this.look_up_gitlab_host(listed, token, cx)
+                        let kept = saved.kept(&listed.api.instance).cloned();
+                        this.look_up_gitlab_host(listed, kept, store, cx)
                     })
                     .collect();
                 this.finish_gitlab_check(cx);
@@ -294,19 +308,24 @@ impl HerdrWindow {
         }));
     }
 
-    /// Lists `hosts`, each with `token`, except that a plain instance has none.
+    /// Lists `hosts`, each with `token`, except that a plain instance has
+    /// none, and what `saved` keeps for it.
     fn show_gitlab_hosts(
         &mut self,
         hosts: &BTreeMap<String, Listed>,
-        saved: impl Fn(&str) -> bool,
+        saved: Option<&Saved>,
         token: impl Fn() -> Token,
     ) {
+        let config = &self.config.gitlab;
         self.menu.gitlab.hosts = hosts
             .iter()
             .map(|(host, listed)| {
                 let plain = listed.api.scheme == Scheme::Http;
+                let kept = saved.and_then(|saved| saved.kept(host));
                 HostStatus {
-                    saved: saved(host),
+                    saved: kept.is_some(),
+                    connected: matches!(kept, Some(Kept::OAuth(_))),
+                    can_connect: !plain && config.application(host).is_some(),
                     checkout: listed.checkout.as_deref().and_then(folder_name),
                     token: if plain { Token::None } else { token() },
                     host: host.clone(),
@@ -316,14 +335,23 @@ impl HerdrWindow {
             .collect();
     }
 
+    /// Looks one instance up off the UI thread. A connected account's token
+    /// is read through the store, which renews it first when it is due.
     fn look_up_gitlab_host(
         &self,
         listed: Listed,
-        saved: Option<SecretString>,
+        kept: Option<Kept>,
+        store: herdr_credentials::Store,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         let host = listed.api.instance.clone();
-        let task = cx.background_spawn(async move { check_host(&listed, saved) });
+        let task = cx.background_spawn(async move {
+            check_host(&listed, || match kept {
+                Some(Kept::OAuth(_)) => account::kept(store, &listed.api.instance),
+                Some(kept) => Some(kept.token().clone()),
+                None => None,
+            })
+        });
         cx.spawn(async move |this, cx| {
             let token = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -442,14 +470,14 @@ impl HerdrWindow {
         };
         self.run_gitlab(cx, false, move || {
             saved::save(store, &host, None)?;
-            Ok(format!("Forgot the token saved for {host}."))
+            Ok(format!("Removed the GitLab sign-in kept for {host}."))
         });
     }
 
     /// Runs a save or forget off the UI thread, then says how it went, looks
     /// every instance up again, and has every window's Orchestrator read
     /// GitLab again. A successful save also empties the token field.
-    fn run_gitlab(
+    pub(super) fn run_gitlab(
         &mut self,
         cx: &mut Context<Self>,
         saves_token: bool,

@@ -21,7 +21,7 @@ pub enum Source {
     /// `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN` in the login shell, for the
     /// instance `GITLAB_HOST` names.
     Environment,
-    /// Pasted in the account menu.
+    /// Kept by the account menu: pasted, or connected with OAuth.
     Saved,
     /// The GitLab CLI's own sign-in (`glab auth login`).
     Cli,
@@ -40,38 +40,35 @@ pub struct Found {
 /// store that cannot be read is skipped, so the CLI's sign-in still serves.
 /// Blocks on direnv, the store, and the CLI: call it from a worker.
 pub fn lookup(host: &str, store: Store, checkout: Option<&Path>) -> Option<Found> {
-    let saved = || match saved::read(store) {
-        Ok(saved) => saved.get(host).cloned(),
-        Err(error) => {
-            tracing::warn!(
-                category = "orchestrator_gitlab",
-                %error,
-                "Saved GitLab tokens could not be read"
-            );
-            None
-        }
-    };
-    resolve(
-        host,
-        || checkout.and_then(|checkout| envrc::token(checkout, host)),
-        herdr_client::login_env::var,
-        saved,
-        || cli_token(host),
-    )
+    lookup_with(host, || kept(store, host), checkout)
 }
 
-/// [`lookup`] with the instance's saved token already read, so a caller
-/// listing many instances reads the store once. Blocks on direnv and the CLI.
+/// The token kept for `host` in `store`, an OAuth one renewed first when
+/// due. A store that cannot be read is logged and skipped.
+pub fn kept(store: Store, host: &str) -> Option<SecretString> {
+    saved::token(store, host).unwrap_or_else(|error| {
+        tracing::warn!(
+            category = "orchestrator_gitlab",
+            %error,
+            "Saved GitLab tokens could not be read"
+        );
+        None
+    })
+}
+
+/// [`lookup`] with the kept token from `saved`, asked only when no earlier
+/// source has one, so a caller listing many instances can read the store
+/// once. Blocks on direnv and the CLI.
 pub fn lookup_with(
     host: &str,
-    saved: Option<SecretString>,
+    saved: impl FnOnce() -> Option<SecretString>,
     checkout: Option<&Path>,
 ) -> Option<Found> {
     resolve(
         host,
         || checkout.and_then(|checkout| envrc::token(checkout, host)),
         herdr_client::login_env::var,
-        || saved,
+        saved,
         || cli_token(host),
     )
 }

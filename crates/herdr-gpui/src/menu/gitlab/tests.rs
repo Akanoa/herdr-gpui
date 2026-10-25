@@ -37,6 +37,8 @@ fn status(source: Option<Source>, user: Option<Result<&str, gitlab::Error>>) -> 
         host: "gitlab.com".into(),
         plain: false,
         saved: source == Some(Source::Saved),
+        connected: false,
+        can_connect: false,
         checkout: Some("app".into()),
         token: match source {
             Some(source) => Token::Found {
@@ -275,6 +277,8 @@ fn an_instance_only_read_over_http_takes_no_token(cx: &mut TestAppContext) {
             host: "code.internal:8080".into(),
             plain: true,
             saved: false,
+            connected: false,
+            can_connect: false,
             checkout: None,
             token: Token::None,
         }];
@@ -285,4 +289,103 @@ fn an_instance_only_read_over_http_takes_no_token(cx: &mut TestAppContext) {
     let (message, token) = message_and_token(&view, cx);
     assert!(message.contains("use an https:// remote"), "{message}");
     assert_eq!(token, "glpat-x");
+}
+
+#[test]
+fn an_instance_that_can_connect_says_so() {
+    let open = HostStatus {
+        can_connect: true,
+        ..status(None, None)
+    };
+    assert!(status_line(&open).starts_with("Not connected."));
+    let connected = HostStatus {
+        connected: true,
+        ..status(Some(Source::Saved), Some(Ok("Akanoa")))
+    };
+    assert_eq!(
+        status_line(&connected),
+        "Signed in as Akanoa, connected here."
+    );
+    let refused = HostStatus {
+        can_connect: true,
+        ..status(
+            Some(Source::Saved),
+            Some(Err(gitlab::Error::Authentication)),
+        )
+    };
+    assert!(status_line(&refused).contains("Connect again"));
+}
+
+#[gpui::test]
+fn gitlab_dot_com_offers_connect_and_a_connected_account_disconnect(cx: &mut TestAppContext) {
+    let (view, cx) = page(cx);
+    // gitlab.com connects with Herdr UI's own application.
+    assert!(cx.debug_bounds("gitlab-connect-0").is_some());
+    view.update(cx, |view, cx| {
+        view.menu.gitlab.hosts = vec![HostStatus {
+            host: "gitlab.example.com".into(),
+            ..status(None, None)
+        }];
+        cx.notify();
+    });
+    draw(cx);
+    // A self-managed instance without an application keeps the token form.
+    assert!(cx.debug_bounds("gitlab-connect-0").is_none());
+    view.update(cx, |view, cx| {
+        view.menu.gitlab.hosts = vec![HostStatus {
+            connected: true,
+            can_connect: true,
+            ..status(Some(Source::Saved), Some(Ok("Akanoa")))
+        }];
+        cx.notify();
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("gitlab-connect-0").is_none());
+    assert!(cx.debug_bounds("gitlab-forget-0").is_some());
+}
+
+#[gpui::test]
+fn a_connection_shows_its_code_and_cancel_stops_it(cx: &mut TestAppContext) {
+    let (view, cx) = page(cx);
+    view.update(cx, |view, cx| {
+        view.menu.gitlab.connecting = Some(super::connect::Connecting::fixture(
+            "gitlab.com",
+            "ABCD-EFGH",
+        ));
+        cx.notify();
+    });
+    draw(cx);
+    for selector in [
+        "gitlab-device-code",
+        "gitlab-open",
+        "gitlab-copy",
+        "gitlab-cancel",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector}");
+    }
+    // Nothing else starts while one connection waits.
+    click(cx, "gitlab-connect-0");
+    view.read_with(cx, |view, _| {
+        let connecting = view.menu.gitlab.connecting.as_ref().unwrap();
+        assert_eq!(connecting.code.as_deref(), Some("ABCD-EFGH"));
+    });
+    click(cx, "gitlab-copy");
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("ABCD-EFGH"));
+    click(cx, "gitlab-cancel");
+    view.read_with(cx, |view, _| assert!(view.menu.gitlab.connecting.is_none()));
+    assert!(cx.debug_bounds("gitlab-device-code").is_none());
+}
+
+#[gpui::test]
+fn a_headless_window_connects_nothing(cx: &mut TestAppContext) {
+    let (view, cx) = page(cx);
+    click(cx, "gitlab-connect-0");
+    view.read_with(cx, |view, _| {
+        assert!(view.menu.gitlab.connecting.is_none());
+        assert_eq!(
+            view.menu.gitlab.message.as_deref(),
+            Some("This window does not keep GitLab tokens.")
+        );
+    });
 }

@@ -125,8 +125,9 @@ when the remote's instance changes:
    the app's own environment), only for the instance `GITLAB_HOST` names
    (gitlab.com when unset), so a gitlab.com token never reaches another host.
    An `.envrc` that sets `GITLAB_HOST` names the instance in step 1 too;
-3. else the token pasted in the account menu for the instance
-   (`gitlab/saved.rs`);
+3. else the account connected, or the token pasted, in the account menu for
+   the instance (`gitlab/saved.rs`). A connected account's access token is
+   renewed shortly before it expires;
 4. else `glab config get token --host <instance>`, the GitLab CLI's own sign-in,
    with its environment tokens removed and the shared bounded process policy;
 5. else none: public projects still list, and a private one asks for a token.
@@ -152,10 +153,27 @@ one never holds the others' rows. An instance every remote reads over plain
 `http://` takes no token, so its row says so and the page refuses to save one
 for it. A pasted personal access token is checked with GitLab before it is
 saved, stays in its field until the save succeeds, and saving or forgetting
-one makes every view sync again. A saved record not in the expected form is
+one makes every view sync again.
+
+**Connect** signs in with OAuth's device authorization grant
+(`gitlab/oauth.rs`), as GitHub's sign-in does: GitLab issues a code, the page
+shows it with **Open GitLab** and **Copy code**, and polls `/oauth/token` on
+timers until the user approves it there. The application is public, so only
+its ID is sent: gitlab.com uses Herdr UI's own, and a self-managed instance
+gets Connect once `[gitlab] applications` names one for it. The approval page
+must be an HTTPS page on the instance, or nothing opens. The granted pair is
+checked with `/api/v4/user`, then kept like a pasted token. GitLab's access
+tokens last two hours and its refresh tokens are single-use, so whoever reads
+a connected account's token (`saved::token`) renews it under one lock when it
+is within 10 minutes of expiring and keeps the new pair before using it; a
+renewal that fails keeps the old token, which GitLab refuses once it expires,
+so the view asks to connect again. **Disconnect** removes the pair. Closing
+the menu stops a connection waiting for approval. A saved record not in the expected form is
 reported on the page and replaced by the next save or forget; a store that
 cannot be read at all is never overwritten. Saved tokens are one
-credential-store record of `host<TAB>token` lines, at most 16 instances: the
+credential-store record of tab-separated lines (`host<TAB>token`, or
+`host<TAB>oauth<TAB>access<TAB>refresh<TAB>expires_at<TAB>application`), at
+most 16 instances: the
 desktop keyring (`dev.herdr.gpui.gitlab`), or with `[gitlab]
 allow_plaintext_credentials = true` the private `0600` `gitlab-credentials`
 file beside the GUI config. A headless window never reads or writes them.

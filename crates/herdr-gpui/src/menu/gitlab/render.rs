@@ -1,8 +1,8 @@
 //! Drawing the account menu's header, shared by its GitHub and GitLab pages,
 //! and the GitLab page itself.
 
-use super::{HostStatus, status_line};
-use crate::{HerdrWindow, menu::Page, search_input::SearchInput};
+use super::{HostStatus, Token, connect::Connecting, status_line};
+use crate::{HerdrWindow, fonts::StyledFont, menu::Page, search_input::SearchInput};
 use gpui::{prelude::*, *};
 
 /// The official GitLab mark, drawn in one color as the GitHub mark is.
@@ -148,41 +148,165 @@ impl HerdrWindow {
 
     fn render_gitlab_host(&self, index: usize, status: &HostStatus, cx: &mut Context<Self>) -> Div {
         let theme = &self.theme;
-        let ready = !self.menu.gitlab.working;
+        let gitlab = &self.menu.gitlab;
+        let ready = !gitlab.working && gitlab.connecting.is_none();
+        let signed_in = matches!(
+            status.token,
+            Token::Found {
+                user: Some(Ok(_)),
+                ..
+            }
+        );
         let host = status.host.clone();
+        let remove = (status.saved).then(|| {
+            let label = if status.connected {
+                "Disconnect"
+            } else {
+                "Forget"
+            };
+            let host = host.clone();
+            self.gitlab_button(format!("gitlab-forget-{index}"), label, false, ready)
+                .when(ready, |button| {
+                    button.on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.forget_gitlab(host.clone(), cx);
+                    }))
+                })
+        });
+        let connect = (status.can_connect && !status.connected).then(|| {
+            let host = host.clone();
+            self.gitlab_button(
+                format!("gitlab-connect-{index}"),
+                "Connect",
+                !signed_in,
+                ready,
+            )
+            .when(ready, |button| {
+                button.on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.connect_gitlab(host.clone(), cx);
+                }))
+            })
+        });
+        let connecting = gitlab
+            .connecting
+            .as_ref()
+            .filter(|connecting| connecting.host == status.host);
         div()
             .debug_selector(move || format!("gitlab-host-{index}"))
-            .flex()
-            .items_start()
-            .gap(px(10.))
             .py(px(8.))
-            .child(gitlab_mark(theme.muted).mt(px(2.)).size(px(16.)))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
+                    .flex()
+                    .items_start()
+                    .gap(px(10.))
+                    .child(gitlab_mark(theme.muted).mt(px(2.)).size(px(16.)))
                     .child(
                         div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(crate::sidebar::label_text(&status.host)),
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(crate::sidebar::label_text(&status.host)),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(theme.subtext()))
+                                    .child(status_line(status)),
+                            ),
                     )
                     .child(
                         div()
-                            .text_color(rgb(theme.subtext()))
-                            .child(status_line(status)),
+                            .flex()
+                            .flex_col()
+                            .items_end()
+                            .gap(px(6.))
+                            .children(connect)
+                            .children(remove),
                     ),
             )
-            .when(status.saved, |row| {
-                row.child(
-                    self.gitlab_button(format!("gitlab-forget-{index}"), "Forget", false, ready)
-                        .when(ready, |button| {
-                            button.on_click(cx.listener(move |this, _, _, cx| {
+            .children(connecting.map(|connecting| self.render_gitlab_connecting(connecting, cx)))
+    }
+
+    /// The code to approve on GitLab, and the buttons that copy it, open
+    /// GitLab, and stop waiting.
+    fn render_gitlab_connecting(&self, connecting: &Connecting, cx: &mut Context<Self>) -> Div {
+        let theme = &self.theme;
+        let Some(code) = &connecting.code else {
+            return div()
+                .debug_selector(|| "gitlab-connecting".into())
+                .ml(px(26.))
+                .text_color(rgb(theme.muted))
+                .child("Asking GitLab for a code\u{2026}");
+        };
+        div()
+            .debug_selector(|| "gitlab-connecting".into())
+            .ml(px(26.))
+            .p(px(12.))
+            .rounded(px(crate::config::corners::CONTROL))
+            .border_1()
+            .border_color(rgb(theme.active))
+            .bg(rgb(theme.background))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child("Approve this code on GitLab:")
+            .child(
+                div().id("gitlab-code-scroll").overflow_x_scroll().child(
+                    div()
+                        .debug_selector(|| "gitlab-device-code".into())
+                        .text_font(&self.config.terminal)
+                        .text_size(px(22.))
+                        .line_height(px(30.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(crate::sidebar::label_text(code)),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.))
+                    .child(
+                        self.gitlab_button("gitlab-open", "Open GitLab", true, true)
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
-                                this.forget_gitlab(host.clone(), cx);
-                            }))
-                        }),
-                )
-            })
+                                this.open_gitlab_approval(cx);
+                            })),
+                    )
+                    .child(
+                        self.gitlab_button(
+                            "gitlab-copy",
+                            if connecting.copied {
+                                "Copied"
+                            } else {
+                                "Copy code"
+                            },
+                            false,
+                            true,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.copy_gitlab_code(cx);
+                        })),
+                    )
+                    .child(
+                        self.gitlab_button("gitlab-cancel", "Cancel", false, true)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.cancel_gitlab_connect(cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .text_color(rgb(theme.muted))
+                    .child("This page updates once GitLab has the approval."),
+            )
     }
 
     pub(in crate::menu) fn render_gitlab_page(&self, cx: &mut Context<Self>) -> Div {
@@ -235,10 +359,10 @@ impl HerdrWindow {
                     .flex_col()
                     .gap(px(10.))
                     .child(div().text_color(rgb(theme.muted)).child(
-                        "A token comes from GITLAB_TOKEN in the project's .envrc (through \
-                             direnv), then in your shell, then a token saved here, then glab. \
-                             A pasted token needs the read_api scope; GitLab is asked whom it \
-                             signs in as before it is saved, only ever over HTTPS.",
+                        "Connect signs in through GitLab in your browser. GITLAB_TOKEN in \
+                         the project's .envrc (through direnv) or your shell is tried first, \
+                         and glab last. A pasted token needs the read_api scope; GitLab is \
+                         asked whom it signs in as before it is saved, only ever over HTTPS.",
                     ))
                     .child(field("Instance", "gitlab-host-input", &gitlab.host))
                     .child(field(

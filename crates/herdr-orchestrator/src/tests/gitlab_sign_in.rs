@@ -296,6 +296,7 @@ fn the_store_follows_the_plaintext_opt_in() {
     assert_eq!(config.store(), herdr_credentials::Store::for_policy(false));
     let opted = gitlab::Config {
         allow_plaintext_credentials: true,
+        ..Default::default()
     };
     assert_eq!(opted.store(), herdr_credentials::Store::for_policy(true));
 }
