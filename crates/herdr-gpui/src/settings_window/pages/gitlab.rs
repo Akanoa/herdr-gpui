@@ -95,6 +95,10 @@ pub(in crate::settings_window) fn status_line(status: &HostStatus) -> String {
     match &status.user {
         None => format!("Checking the token {from}\u{2026}"),
         Some(Ok(user)) => format!("Signed in as {user}, {from}."),
+        // The error's own text sends the user here, so this page says it plainly.
+        Some(Err(error)) if matches!(**error, gitlab::Error::Authentication) => {
+            format!("GitLab refused the token {from}. Paste a new one below.")
+        }
         Some(Err(error)) => format!("{error}. The token is {from}."),
     }
 }

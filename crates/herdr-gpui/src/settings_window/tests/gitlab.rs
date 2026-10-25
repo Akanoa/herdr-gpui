@@ -51,8 +51,15 @@ fn a_hosts_row_says_where_its_token_comes_from_and_whom_it_signs_in() {
         Some(Source::Cli),
         Some(Err(gitlab::Error::Authentication)),
     ));
-    assert!(refused.starts_with("GitLab refused the token"), "{refused}");
-    assert!(refused.ends_with("The token is from the GitLab CLI (glab)."));
+    assert_eq!(
+        refused,
+        "GitLab refused the token from the GitLab CLI (glab). Paste a new one below."
+    );
+    let limited = status_line(&status(
+        Some(Source::Saved),
+        Some(Err(gitlab::Error::Scope)),
+    ));
+    assert!(limited.ends_with("The token is saved here."), "{limited}");
     assert!(
         status_line(&status(Some(Source::Environment), Some(Ok("me"))))
             .ends_with("from GITLAB_TOKEN.")
