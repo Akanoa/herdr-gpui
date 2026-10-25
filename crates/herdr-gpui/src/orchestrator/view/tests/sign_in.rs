@@ -60,3 +60,25 @@ fn a_gitlab_source_waiting_for_a_token_asks_for_the_gitlab_sign_in(cx: &mut Test
         cx.update(|_, cx| view.read(cx).gitlab_hosts().map(str::to_owned).collect());
     assert_eq!(hosts, ["gitlab.com"]);
 }
+
+#[gpui::test]
+fn a_changed_sign_in_reaches_every_windows_orchestrator(cx: &mut TestAppContext) {
+    let notified = Rc::new(RefCell::new(0));
+    for _ in 0..2 {
+        let (window, cx) = cx.add_window_view(crate::sidebar::layout_tests::fixture_window);
+        let seen = notified.clone();
+        cx.update(|_, cx| {
+            let view = window.update(cx, |window, cx| {
+                let id = window.sections_view(cx);
+                window.orchestrators[&id].view.clone()
+            });
+            cx.observe(&view, move |_, _| *seen.borrow_mut() += 1)
+                .detach();
+        });
+        cx.run_until_parked();
+    }
+    *notified.borrow_mut() = 0;
+    cx.update(crate::HerdrWindow::refresh_all_orchestrators);
+    cx.run_until_parked();
+    assert_eq!(*notified.borrow(), 2);
+}

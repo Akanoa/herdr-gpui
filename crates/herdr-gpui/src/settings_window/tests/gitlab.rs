@@ -31,6 +31,7 @@ fn status(source: Option<Source>, user: Option<Result<&str, gitlab::Error>>) -> 
     HostStatus {
         host: "gitlab.com".into(),
         source,
+        saved: source == Some(Source::Saved),
         user: user.map(|user| user.map(str::to_owned).map_err(Arc::new)),
     }
 }
@@ -93,6 +94,16 @@ fn only_a_saved_token_can_be_forgotten(cx: &mut TestAppContext) {
     });
     draw(cx);
     assert!(cx.debug_bounds("gitlab-forget-0").is_none());
+    // GITLAB_TOKEN wins over a saved token, which can still be forgotten.
+    view.update(cx, |view, cx| {
+        view.gitlab.hosts = vec![HostStatus {
+            saved: true,
+            ..status(Some(Source::Environment), Some(Ok("Akanoa")))
+        }];
+        cx.notify();
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("gitlab-forget-0").is_some());
 }
 
 #[gpui::test]
@@ -120,6 +131,25 @@ fn saving_without_a_token_or_with_a_bad_host_asks_nothing(cx: &mut TestAppContex
             Some("\"gitlab.com/group\" is not a GitLab host name")
         );
         // A refused save keeps what was typed, so it can be corrected.
+        let token = view.gitlab.token_input().unwrap();
+        assert_eq!(token.read(cx).text(), "glpat-x");
+    });
+}
+
+#[gpui::test]
+fn a_headless_window_saves_no_token(cx: &mut TestAppContext) {
+    let (view, cx) = page(cx);
+    view.update(cx, |view, cx| {
+        let token = view.gitlab.token_input().unwrap();
+        token.update(cx, |input, cx| input.set_text_selected("glpat-x", cx));
+    });
+    click(cx, "gitlab-save");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(
+            view.gitlab.message.as_deref(),
+            Some("This window does not keep GitLab tokens.")
+        );
+        // Nothing was sent or saved, so what was typed stays.
         let token = view.gitlab.token_input().unwrap();
         assert_eq!(token.read(cx).text(), "glpat-x");
     });

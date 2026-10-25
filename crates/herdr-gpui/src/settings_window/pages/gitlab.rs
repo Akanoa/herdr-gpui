@@ -17,11 +17,17 @@ use std::sync::Arc;
 
 /// gitlab.com, listed when no repository names another host.
 const DEFAULT_HOST: &str = "gitlab.com";
+/// What a save or forget says in a window that keeps no saved credential.
+const NO_STORE: &str = "This window does not keep GitLab tokens.";
 
 /// One host the page lists.
 pub(in crate::settings_window) struct HostStatus {
     pub(in crate::settings_window) host: String,
+    /// The token the host is read with, which may not be the saved one.
     pub(in crate::settings_window) source: Option<Source>,
+    /// A token is saved for the host, so Forget is offered even while
+    /// `GITLAB_TOKEN` takes precedence over it.
+    pub(in crate::settings_window) saved: bool,
     /// Whom GitLab signs the token in as, once asked.
     pub(in crate::settings_window) user: Option<Result<String, Arc<gitlab::Error>>>,
 }
@@ -35,8 +41,11 @@ pub(in crate::settings_window) struct GitLabSettings {
     /// A save or forget under way; the buttons wait for it.
     working: bool,
     pub(in crate::settings_window) message: Option<String>,
-    /// Lookups and saves under way, dropped with the page.
+    /// The lookup under way, replaced by the next one.
     _task: Option<Task<()>>,
+    /// The save or forget under way. Kept apart from lookups, which reopening
+    /// the page starts again, so its result is still shown and acted on.
+    _save: Option<Task<()>>,
 }
 
 #[cfg(test)]
@@ -98,9 +107,8 @@ fn new_token_url(host: &str) -> String {
 /// Every host's token and whom it signs in as. Blocks: run it off the UI thread.
 fn check(hosts: Vec<String>, store: herdr_credentials::Store) -> Vec<HostStatus> {
     let mut hosts = hosts;
-    if let Ok(saved) = saved::read(store) {
-        hosts.extend(saved.hosts().map(str::to_owned));
-    }
+    let saved = saved::read(store).unwrap_or_default();
+    hosts.extend(saved.hosts().map(str::to_owned));
     if hosts.is_empty() {
         hosts.push(DEFAULT_HOST.to_owned());
     }
@@ -112,11 +120,13 @@ fn check(hosts: Vec<String>, store: herdr_credentials::Store) -> Vec<HostStatus>
             Some(found) => HostStatus {
                 user: Some(account::whoami(&host, &found.token).map_err(Arc::new)),
                 source: Some(found.source),
+                saved: saved.get(&host).is_some(),
                 host,
             },
             None => HostStatus {
                 host,
                 source: None,
+                saved: false,
                 user: None,
             },
         })
@@ -151,18 +161,21 @@ impl SettingsWindow {
         self.check_gitlab(cx);
     }
 
+    /// The store saved tokens live in, or `None` when the source window is
+    /// headless or gone: such a window touches no saved credential.
+    fn gitlab_store(&self, cx: &App) -> Option<herdr_credentials::Store> {
+        self.source
+            .read_with(cx, |window, _| window.reads_credentials())
+            .unwrap_or_default()
+            .then(|| self.config.gitlab.store())
+    }
+
     /// Looks every host up again: the Orchestrator's GitLab hosts and those
-    /// with a saved token. A headless window, or none, touches no saved
-    /// credential; the page still lists gitlab.com.
+    /// with a saved token. Without a store the page still lists gitlab.com.
     fn check_gitlab(&mut self, cx: &mut Context<Self>) {
-        let (live, hosts) = self
+        let hosts = self
             .source
-            .read_with(cx, |window, cx| {
-                (
-                    window.reads_credentials(),
-                    window.orchestrator_gitlab_hosts(cx),
-                )
-            })
+            .read_with(cx, |window, cx| window.orchestrator_gitlab_hosts(cx))
             .unwrap_or_default();
         let shown = if hosts.is_empty() {
             vec![DEFAULT_HOST.to_owned()]
@@ -174,13 +187,13 @@ impl SettingsWindow {
             .map(|host| HostStatus {
                 host,
                 source: None,
+                saved: false,
                 user: None,
             })
             .collect();
-        if !live {
+        let Some(store) = self.gitlab_store(cx) else {
             return;
-        }
-        let store = self.config.gitlab.store();
+        };
         let task = cx.background_spawn(async move { check(hosts, store) });
         self.gitlab._task = Some(cx.spawn(async move |this, cx| {
             let hosts = task.await;
@@ -196,7 +209,6 @@ impl SettingsWindow {
                     input.update(cx, |input, cx| input.set_text_selected(&host, cx));
                 }
                 this.gitlab.hosts = hosts;
-                this.gitlab.working = false;
                 cx.notify();
             });
         }));
@@ -224,9 +236,13 @@ impl SettingsWindow {
             cx.notify();
             return;
         }
+        let Some(store) = self.gitlab_store(cx) else {
+            self.gitlab.message = Some(NO_STORE.to_owned());
+            cx.notify();
+            return;
+        };
         token_input.update(cx, SearchInput::clear);
         let token = SecretString::from(token);
-        let store = self.config.gitlab.store();
         self.run_gitlab(cx, move || {
             let user = account::whoami(&host, &token)?;
             saved::save(store, &host, Some(token))?;
@@ -237,7 +253,11 @@ impl SettingsWindow {
     }
 
     fn forget_gitlab(&mut self, host: String, cx: &mut Context<Self>) {
-        let store = self.config.gitlab.store();
+        let Some(store) = self.gitlab_store(cx) else {
+            self.gitlab.message = Some(NO_STORE.to_owned());
+            cx.notify();
+            return;
+        };
         self.run_gitlab(cx, move || {
             saved::save(store, &host, None)?;
             Ok(format!("Forgot the token saved for {host}."))
@@ -245,7 +265,8 @@ impl SettingsWindow {
     }
 
     /// Runs a save or forget off the UI thread, then says how it went, looks
-    /// every host up again, and has the Orchestrator read GitLab again.
+    /// every host up again, and has every window's Orchestrator read GitLab
+    /// again.
     fn run_gitlab(
         &mut self,
         cx: &mut Context<Self>,
@@ -254,7 +275,7 @@ impl SettingsWindow {
         self.gitlab.working = true;
         self.gitlab.message = None;
         let task = cx.background_spawn(async move { work() });
-        self.gitlab._task = Some(cx.spawn(async move |this, cx| {
+        self.gitlab._save = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.gitlab.working = false;
@@ -262,9 +283,7 @@ impl SettingsWindow {
                     Ok(done) => done,
                     Err(error) => error.to_string(),
                 });
-                let _ = this
-                    .source
-                    .update(cx, |window, cx| window.refresh_orchestrators(cx));
+                crate::HerdrWindow::refresh_all_orchestrators(cx);
                 this.check_gitlab(cx);
                 cx.notify();
             });
@@ -289,7 +308,7 @@ impl SettingsWindow {
                     )
                     .on_click(move |_, _, cx| cx.open_url(&url)),
                 );
-            if status.source == Some(Source::Saved) {
+            if status.saved {
                 row = row.control(
                     ui::button(theme, format!("gitlab-forget-{index}"), "Forget", ready).when(
                         ready,

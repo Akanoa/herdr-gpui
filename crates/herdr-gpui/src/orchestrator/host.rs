@@ -151,6 +151,12 @@ impl HerdrWindow {
     /// of one repository are one: they share its database.
     pub(crate) fn repo_specs(&self) -> Vec<RepoSpec> {
         let mut specs: Vec<RepoSpec> = Vec::new();
+        // A headless window never reads the user's saved GitLab tokens.
+        let gitlab_store = if self.reads_credentials() {
+            self.config.gitlab.store()
+        } else {
+            herdr_credentials::Store::default()
+        };
         for (index, endpoint) in self.endpoints.iter().enumerate() {
             let target = &endpoint.connection.target;
             let state = if index == self.selected_endpoint {
@@ -190,7 +196,7 @@ impl HerdrWindow {
                         workspace_id: workspace.workspace_id.clone(),
                         token: token.clone(),
                         data_root: None,
-                        gitlab_store: self.config.gitlab.store(),
+                        gitlab_store,
                         timing: Timing::default(),
                     },
                 });
@@ -243,13 +249,23 @@ impl HerdrWindow {
         hosts
     }
 
-    /// A saved sign-in changed elsewhere, such as in Settings > GitLab: every
-    /// view syncs again, so a new token shows without pressing Refresh.
-    pub(crate) fn refresh_orchestrators(&mut self, cx: &mut Context<Self>) {
-        for orchestrator in self.orchestrators.values() {
-            orchestrator
-                .view
-                .update(cx, |view, cx| view.credentials_changed(cx));
+    /// A saved sign-in changed, such as in Settings > GitLab: every view in
+    /// every main window syncs again, so a new token shows without pressing
+    /// Refresh. Each window keeps its own views and workers.
+    pub(crate) fn refresh_all_orchestrators(cx: &mut App) {
+        let windows: Vec<_> = cx
+            .windows()
+            .into_iter()
+            .filter_map(|handle| handle.downcast::<HerdrWindow>())
+            .collect();
+        for handle in windows {
+            let _ = handle.update(cx, |window, _, cx| {
+                for orchestrator in window.orchestrators.values() {
+                    orchestrator
+                        .view
+                        .update(cx, |view, cx| view.credentials_changed(cx));
+                }
+            });
         }
     }
 
