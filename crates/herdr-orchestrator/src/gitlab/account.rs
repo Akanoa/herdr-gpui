@@ -1,7 +1,7 @@
 //! Which token a GitLab host is read with, where it came from, and whom
 //! GitLab takes it for: what Settings > GitLab shows for each host.
 
-use super::{Error, TIMEOUT, authorization, cli_token, environment_token, saved};
+use super::{Api, Error, Scheme, TIMEOUT, authorization, cli_token, environment_token, saved};
 use herdr_credentials::Store;
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -81,11 +81,16 @@ struct User {
     username: String,
 }
 
-/// The username GitLab at `host` signs `token` in as. Always over HTTPS, so
-/// the token is never sent in the clear. Blocks on the network.
-pub fn whoami(host: &str, token: &SecretString) -> Result<String, Error> {
-    let url = url::Url::parse(&format!("https://{host}/api/v4/user"))
-        .map_err(|_| Error::Address(host.to_owned()))?;
+/// The username GitLab at `api` signs `token` in as. Always over HTTPS, so
+/// the token is never sent in the clear: an API only served over HTTP is
+/// refused unasked. Blocks on the network.
+pub fn whoami(api: &Api, token: &SecretString) -> Result<String, Error> {
+    if api.scheme == Scheme::Http {
+        return Err(Error::InsecureHost(api.instance.clone()));
+    }
+    let origin = format!("https://{}", api.host);
+    let url = url::Url::parse(&format!("{origin}/api/v4/user"))
+        .map_err(|_| Error::Address(api.host.clone()))?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         .max_redirects(0)
@@ -98,7 +103,10 @@ pub fn whoami(host: &str, token: &SecretString) -> Result<String, Error> {
         .header("Accept", "application/json")
         .header("Authorization", authorization(token)?)
         .call()
-        .map_err(|error| Error::Network(Box::new(error)))?;
+        .map_err(|error| Error::Network {
+            origin,
+            source: Box::new(error),
+        })?;
     match reply.status().as_u16() {
         200 => {}
         401 => return Err(Error::Authentication),

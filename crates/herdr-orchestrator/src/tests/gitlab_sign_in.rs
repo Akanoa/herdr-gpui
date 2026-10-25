@@ -297,3 +297,27 @@ fn the_store_follows_the_plaintext_opt_in() {
     };
     assert_eq!(opted.store(), herdr_credentials::Store::for_policy(true));
 }
+
+#[test]
+fn an_instance_is_checked_where_glab_sends_its_api() {
+    use crate::gitlab::{Api, Scheme, account::whoami, cli_hosts::CliHost};
+    let cli = [CliHost {
+        host: "gitlab.example.com".into(),
+        api_host: Some("api.gitlab.example.com".into()),
+        api_protocol: Some("HTTP".into()),
+        ..CliHost::default()
+    }];
+    let api = Api::of_instance("GitLab.Example.com", &cli);
+    assert_eq!(api.host, "api.gitlab.example.com");
+    assert_eq!(api.scheme, Scheme::Http);
+    // A token is never sent to an API served only over HTTP, so nothing is asked.
+    assert!(matches!(
+        whoami(&api, &secret("glpat-x")),
+        Err(gitlab::Error::InsecureHost(_))
+    ));
+    let plain = Api::of_instance("gitlab.com", &cli);
+    assert_eq!(
+        (plain.host.as_str(), plain.scheme),
+        ("gitlab.com", Scheme::Https)
+    );
+}

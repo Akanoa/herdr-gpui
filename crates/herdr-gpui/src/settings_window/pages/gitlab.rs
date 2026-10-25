@@ -8,8 +8,9 @@ use super::{SettingsWindow, ui};
 use crate::{search_input::SearchInput, settings_window::Section};
 use gpui::{prelude::*, *};
 use herdr_orchestrator::gitlab::{
-    self, Scheme,
+    self, Api, Scheme,
     account::{self, Source},
+    cli_hosts::{self, CliHost},
     saved,
 };
 use secrecy::SecretString;
@@ -131,33 +132,46 @@ fn new_token_url(host: &str) -> String {
     format!("https://{host}/-/user_settings/personal_access_tokens?name=Herdr%20UI&scopes=read_api")
 }
 
-/// The hosts listed, by normalized name: plain only when every remote
-/// reads it over HTTP, since one HTTPS remote is enough to send a token.
+/// The instances listed, by normalized name, each with its API: a remote's
+/// host becomes the instance whose `ssh_host` glab names it, and a saved
+/// instance keeps glab's `api_host` for it. An instance is plain only when
+/// every remote reads it over HTTP, since one HTTPS remote is enough to
+/// send a token.
 pub(in crate::settings_window) fn merge_hosts(
     listed: impl IntoIterator<Item = (String, Scheme)>,
     saved: impl IntoIterator<Item = String>,
-) -> BTreeMap<String, bool> {
-    let mut hosts = BTreeMap::new();
-    let listed = listed.into_iter().map(|(host, scheme)| {
-        let host = saved::normalize_host(&host).unwrap_or(host);
-        (host, scheme == Scheme::Http)
-    });
-    for (host, plain) in listed.chain(saved.into_iter().map(|host| (host, false))) {
-        *hosts.entry(host).or_insert(plain) &= plain;
+    cli: &[CliHost],
+) -> BTreeMap<String, Api> {
+    let mut hosts = BTreeMap::<String, Api>::new();
+    let listed = listed
+        .into_iter()
+        .map(|(host, scheme)| Api::new(&host, scheme, cli));
+    let saved = saved.into_iter().map(|host| Api::of_instance(&host, cli));
+    for mut api in listed.chain(saved) {
+        api.instance = saved::normalize_host(&api.instance).unwrap_or(api.instance);
+        match hosts.get_mut(&api.instance) {
+            Some(known) if known.scheme == Scheme::Http && api.scheme == Scheme::Https => {
+                *known = api;
+            }
+            Some(_) => {}
+            None => {
+                hosts.insert(api.instance.clone(), api);
+            }
+        }
     }
     if hosts.is_empty() {
-        hosts.insert(DEFAULT_HOST.to_owned(), false);
+        hosts.insert(DEFAULT_HOST.to_owned(), Api::of_instance(DEFAULT_HOST, cli));
     }
     hosts
 }
 
-/// A host's token and whom it signs in as. Blocks on `glab` and the
+/// An instance's token and whom it signs in as. Blocks on `glab` and the
 /// network: run it off the UI thread.
-fn check_host(host: &str, saved: Option<SecretString>) -> Token {
-    match account::lookup_with(host, saved) {
+fn check_host(api: &Api, saved: Option<SecretString>) -> Token {
+    match account::lookup_with(&api.instance, saved) {
         Some(found) => Token::Found {
             user: Some(
-                account::whoami(host, &found.token)
+                account::whoami(api, &found.token)
                     .map_err(|error| Arc::new(error.from_source(found.source))),
             ),
             source: found.source,
@@ -219,17 +233,17 @@ impl SettingsWindow {
         let Some(store) = self.gitlab_store(cx) else {
             self.gitlab._task = None;
             self.gitlab.problem = None;
-            self.show_gitlab_hosts(merge_hosts(listed, []), |_| false, || Token::None);
+            self.show_gitlab_hosts(&merge_hosts(listed, [], &[]), |_| false, || Token::None);
             return;
         };
         self.show_gitlab_hosts(
-            merge_hosts(listed.clone(), []),
+            &merge_hosts(listed.clone(), [], &[]),
             |_| false,
             || Token::Unknown,
         );
-        let read = cx.background_spawn(async move { saved::read(store) });
+        let read = cx.background_spawn(async move { (saved::read(store), cli_hosts::read()) });
         self.gitlab._task = Some(cx.spawn(async move |this, cx| {
-            let saved = read.await;
+            let (saved, cli) = read.await;
             let _ = this.update(cx, |this, cx| {
                 this.gitlab.problem = saved.as_ref().err().map(|error| match error {
                     gitlab::Error::Record => {
@@ -238,18 +252,15 @@ impl SettingsWindow {
                     error => error.to_string(),
                 });
                 let saved = saved.unwrap_or_default();
-                let hosts = merge_hosts(listed, saved.hosts().map(str::to_owned));
-                this.show_gitlab_hosts(hosts, |host| saved.get(host).is_some(), || Token::Unknown);
-                let lookups = this
-                    .gitlab
-                    .hosts
-                    .iter()
-                    .filter(|status| !status.plain)
-                    .map(|status| (status.host.clone(), saved.get(&status.host).cloned()))
-                    .collect::<Vec<_>>();
-                this.gitlab._lookups = lookups
-                    .into_iter()
-                    .map(|(host, token)| this.look_up_gitlab_host(host, token, cx))
+                let hosts = merge_hosts(listed, saved.hosts().map(str::to_owned), &cli);
+                this.show_gitlab_hosts(&hosts, |host| saved.get(host).is_some(), || Token::Unknown);
+                this.gitlab._lookups = hosts
+                    .into_values()
+                    .filter(|api| api.scheme == Scheme::Https)
+                    .map(|api| {
+                        let token = saved.get(&api.instance).cloned();
+                        this.look_up_gitlab_host(api, token, cx)
+                    })
                     .collect();
                 this.finish_gitlab_check(cx);
                 cx.notify();
@@ -260,31 +271,32 @@ impl SettingsWindow {
     /// Lists `hosts`, each with `token`, except that a plain host has none.
     fn show_gitlab_hosts(
         &mut self,
-        hosts: BTreeMap<String, bool>,
+        hosts: &BTreeMap<String, Api>,
         saved: impl Fn(&str) -> bool,
         token: impl Fn() -> Token,
     ) {
         self.gitlab.hosts = hosts
-            .into_iter()
-            .map(|(host, plain)| HostStatus {
-                saved: saved(&host),
-                token: if plain { Token::None } else { token() },
-                host,
-                plain,
+            .iter()
+            .map(|(host, api)| {
+                let plain = api.scheme == Scheme::Http;
+                HostStatus {
+                    saved: saved(host),
+                    token: if plain { Token::None } else { token() },
+                    host: host.clone(),
+                    plain,
+                }
             })
             .collect();
     }
 
     fn look_up_gitlab_host(
         &self,
-        host: String,
+        api: Api,
         saved: Option<SecretString>,
         cx: &mut Context<Self>,
     ) -> Task<()> {
-        let task = cx.background_spawn({
-            let host = host.clone();
-            async move { check_host(&host, saved) }
-        });
+        let host = api.instance.clone();
+        let task = cx.background_spawn(async move { check_host(&api, saved) });
         cx.spawn(async move |this, cx| {
             let token = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -380,7 +392,9 @@ impl SettingsWindow {
         // The field keeps the token until it is saved: GitLab shows a token
         // only once, so a failed check must not lose it.
         self.run_gitlab(cx, true, move || {
-            let user = account::whoami(&host, &token)?;
+            // glab may serve the instance's API elsewhere, or only over HTTP.
+            let api = Api::of_instance(&host, &cli_hosts::read());
+            let user = account::whoami(&api, &token)?;
             saved::save(store, &host, Some(token))?;
             Ok(format!(
                 "Saved. GitLab at {host} signs this token in as {user}."

@@ -4,7 +4,8 @@
 //! nothing here reads the keyring or runs `glab`.
 use super::*;
 use crate::settings_window::pages::gitlab::{HostStatus, Token, merge_hosts, status_line};
-use herdr_orchestrator::gitlab::{self, Scheme, account::Source};
+use herdr_orchestrator::gitlab::{self, Scheme, account::Source, cli_hosts::CliHost};
+use std::collections::BTreeMap;
 
 fn page(cx: &mut TestAppContext) -> (Entity<SettingsWindow>, &mut VisualTestContext) {
     let (view, cx) = cx.add_window_view(skill_fixture);
@@ -97,6 +98,12 @@ fn a_host_only_read_over_http_says_no_token_is_sent() {
 
 #[test]
 fn hosts_are_listed_once_whatever_their_case_and_https_wins() {
+    let listed = |hosts: BTreeMap<String, gitlab::Api>| -> Vec<(String, bool)> {
+        hosts
+            .into_iter()
+            .map(|(host, api)| (host, api.scheme == Scheme::Http))
+            .collect()
+    };
     let hosts = merge_hosts(
         [
             ("GitLab.Example.com".to_owned(), Scheme::Https),
@@ -105,18 +112,40 @@ fn hosts_are_listed_once_whatever_their_case_and_https_wins() {
             ("mixed.example.com".to_owned(), Scheme::Https),
         ],
         ["gitlab.example.com".to_owned()],
+        &[],
     );
-    let hosts: Vec<_> = hosts.into_iter().collect();
     assert_eq!(
-        hosts,
+        listed(hosts),
         [
             ("code.internal:8080".to_owned(), true),
             ("gitlab.example.com".to_owned(), false),
             ("mixed.example.com".to_owned(), false),
         ]
     );
-    let empty: Vec<_> = merge_hosts([], []).into_iter().collect();
-    assert_eq!(empty, [("gitlab.com".to_owned(), false)]);
+    assert_eq!(
+        listed(merge_hosts([], [], &[])),
+        [("gitlab.com".to_owned(), false)]
+    );
+}
+
+#[test]
+fn a_remote_on_an_ssh_host_lists_its_instance_and_api() {
+    let cli = [CliHost {
+        host: "gitlab.example.com".into(),
+        api_host: Some("api.gitlab.example.com".into()),
+        ssh_host: Some("gitlab-ssh.example.com".into()),
+        ..CliHost::default()
+    }];
+    let hosts = merge_hosts(
+        [("gitlab-ssh.example.com".to_owned(), Scheme::Https)],
+        ["gitlab.example.com".to_owned()],
+        &cli,
+    );
+    let apis: Vec<_> = hosts.values().collect();
+    assert_eq!(apis.len(), 1);
+    assert_eq!(apis[0].instance, "gitlab.example.com");
+    // The token is checked where glab sends the instance's API requests.
+    assert_eq!(apis[0].host, "api.gitlab.example.com");
 }
 
 #[gpui::test]

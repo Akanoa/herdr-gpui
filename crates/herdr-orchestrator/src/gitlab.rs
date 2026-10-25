@@ -4,13 +4,18 @@
 //!
 //! The token comes from `GITLAB_TOKEN` (or `GITLAB_ACCESS_TOKEN`) for the host
 //! `GITLAB_HOST` names, gitlab.com by default, else from the one Settings >
-//! GitLab saved for the remote's host (`saved`), else from the GitLab CLI's
-//! own sign-in there (`account`). Without one, public projects still list.
+//! GitLab saved for the remote's instance (`saved`), else from the GitLab
+//! CLI's own sign-in there (`account`). Without one, public projects still
+//! list.
+//!
+//! A remote on an SSH host of its own, such as `gitlab-ssh.example.com` for
+//! an instance served at `gitlab.example.com`, is read from the instance
+//! whose `ssh_host` the GitLab CLI's config names it, as glab itself does.
 
 pub mod account;
 pub mod saved;
 
-use super::{Activity, Checkpoint, Item, ItemKey, SourceKey};
+use super::{Activity, Checkpoint, Item, ItemKey, Provider, SourceKey};
 use chrono::{DateTime, SecondsFormat, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
@@ -21,6 +26,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 use zeroize::Zeroizing;
+
+pub mod cli_hosts;
 
 const PAGE: usize = 100;
 /// The most open issues one sync reads. A project with more is shown but
@@ -40,8 +47,13 @@ const TOKEN_VARIABLES: [&str; 2] = ["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN"];
 /// Why GitLab could not be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("GitLab could not be reached: {0}")]
-    Network(#[source] Box<ureq::Error>),
+    #[error("GitLab could not be reached at {origin}: {source}")]
+    Network {
+        /// The scheme and host tried, so a wrong one shows.
+        origin: String,
+        #[source]
+        source: Box<ureq::Error>,
+    },
     #[error("GitLab's answer could not be read: {0}")]
     Read(#[source] std::io::Error),
     #[error("GitLab's answer exceeded the size limit")]
@@ -199,6 +211,92 @@ impl Scheme {
     }
 }
 
+/// `source` as a GitLab project when its host's name alone reads as GitHub
+/// but the GitLab CLI knows that host, as an instance or an instance's
+/// `ssh_host`. Only the provider changes; the host and path stay as
+/// agent-launcher keys them. `cli` reads glab's config, only when needed.
+/// Returns whether `source` changed.
+pub fn recognize(source: &mut SourceKey, cli: impl FnOnce() -> Vec<cli_hosts::CliHost>) -> bool {
+    if source.provider != Provider::Github || source.host == "github.com" {
+        return false;
+    }
+    let known = cli_hosts::knows(&cli(), &source.host);
+    if known {
+        source.provider = Provider::Gitlab;
+    }
+    known
+}
+
+/// Where a project's API is. The remote's host, unless the GitLab CLI names
+/// it as an instance's `ssh_host`: then that instance's, at its `api_host`
+/// over its `api_protocol`. The source key keeps the remote's host either way,
+/// as agent-launcher keys it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Api {
+    /// The instance's name, which tokens are saved under and `GITLAB_HOST`
+    /// names.
+    pub instance: String,
+    /// Where requests go: the instance, unless the CLI sets another.
+    pub host: String,
+    pub scheme: Scheme,
+}
+
+impl Api {
+    /// The API of a remote on `host` reached over `scheme`, given the GitLab
+    /// CLI's instances.
+    pub fn new(host: &str, scheme: Scheme, cli: &[cli_hosts::CliHost]) -> Self {
+        let Some(mapped) = cli_hosts::by_ssh_host(cli, host) else {
+            return Self {
+                instance: host.to_owned(),
+                host: host.to_owned(),
+                scheme,
+            };
+        };
+        Self {
+            instance: mapped.host.clone(),
+            host: mapped
+                .api_host
+                .clone()
+                .unwrap_or_else(|| mapped.host.clone()),
+            scheme: Self::cli_scheme(Some(mapped)),
+        }
+    }
+
+    /// The API of instance `host`, as named in Settings > GitLab or by a
+    /// saved token: the GitLab CLI's `api_host` and `api_protocol` for it,
+    /// else the instance itself over HTTPS.
+    pub fn of_instance(host: &str, cli: &[cli_hosts::CliHost]) -> Self {
+        let named = cli
+            .iter()
+            .find(|named| named.host.eq_ignore_ascii_case(host));
+        Self {
+            instance: host.to_owned(),
+            host: named
+                .and_then(|named| named.api_host.clone())
+                .unwrap_or_else(|| host.to_owned()),
+            scheme: Self::cli_scheme(named),
+        }
+    }
+
+    /// glab reads an instance's API over HTTPS unless told otherwise.
+    fn cli_scheme(named: Option<&cli_hosts::CliHost>) -> Scheme {
+        match named.and_then(|named| named.api_protocol.as_deref()) {
+            Some(protocol) if protocol.eq_ignore_ascii_case("http") => Scheme::Http,
+            _ => Scheme::Https,
+        }
+    }
+
+    /// [`Self::new`] with this machine's GitLab CLI config. Reads a file:
+    /// call it from a worker.
+    pub fn resolve(host: &str, scheme: Scheme) -> Self {
+        Self::new(host, scheme, &cli_hosts::read())
+    }
+
+    fn origin(&self) -> String {
+        format!("{}://{}", self.scheme.as_str(), self.host)
+    }
+}
+
 /// What a request carries: a token only over HTTPS, since anyone who can
 /// watch a plain HTTP connection could take it. Over HTTP the token is
 /// withheld and the read is anonymous, which public projects allow.
@@ -219,11 +317,11 @@ impl<'a> Credential<'a> {
     }
 }
 
-/// Lists `source`'s open issues over `scheme`, reading GitLab as `token`
-/// when given and the scheme keeps it private. `previous` keeps
+/// Lists `source`'s open issues from `api`, reading GitLab as `token` when
+/// given and the scheme keeps it private. `previous` keeps
 /// agent-launcher's markers, which herdr-gpui never adds.
 pub fn sync(
-    (source, scheme): (&SourceKey, Scheme),
+    (source, api): (&SourceKey, &Api),
     token: Option<&SecretString>,
     previous: Option<&Checkpoint>,
     cancelled: &impl Fn() -> bool,
@@ -235,14 +333,14 @@ pub fn sync(
         .http_status_as_error(false)
         .build()
         .into();
-    let credential = Credential::new(scheme, token);
+    let credential = Credential::new(api.scheme, token);
     let mut fetch = |after| {
         if cancelled() {
             return Err(super::Error::Cancelled);
         }
         Ok(fetch_page(
             &agent,
-            (source, scheme),
+            (source, api),
             credential,
             after,
             cooldown,
@@ -302,11 +400,11 @@ pub fn full(
 
 /// The API address of `source`'s open issues created at or after `after`.
 pub fn issues_url(
-    (source, scheme): (&SourceKey, Scheme),
+    (source, api): (&SourceKey, &Api),
     after: Option<DateTime<Utc>>,
 ) -> Result<url::Url, Error> {
     let invalid = || Error::Address(source.repository.clone());
-    let base = format!("{}://{}/api/v4/projects", scheme.as_str(), source.host);
+    let base = format!("{}/api/v4/projects", api.origin());
     let mut url = url::Url::parse(&base).map_err(|_| invalid())?;
     // One segment: the project's full path, its slashes escaped as GitLab asks.
     url.path_segments_mut()
@@ -333,28 +431,29 @@ pub fn issues_url(
 
 fn fetch_page(
     agent: &ureq::Agent,
-    (source, scheme): (&SourceKey, Scheme),
+    (source, api): (&SourceKey, &Api),
     credential: Credential<'_>,
     after: Option<DateTime<Utc>>,
     cooldown: &mut Option<Duration>,
 ) -> Result<Vec<IssueNode>, Error> {
     let mut request = agent
-        .get(issues_url((source, scheme), after)?.as_str())
+        .get(issues_url((source, api), after)?.as_str())
         .header("User-Agent", "Herdr-GPUI")
         .header("Accept", "application/json");
     if let Credential::Token(token) = credential {
         request = request.header("Authorization", authorization(token)?);
     }
-    let mut reply = request
-        .call()
-        .map_err(|error| Error::Network(Box::new(error)))?;
+    let mut reply = request.call().map_err(|error| Error::Network {
+        origin: api.origin(),
+        source: Box::new(error),
+    })?;
     let status = reply.status().as_u16();
     if status != 200 {
         *cooldown = retry_after(status, reply.headers(), SystemTime::now());
         tracing::warn!(
             category = "orchestrator_gitlab",
             status,
-            host = source.host.as_str(),
+            host = api.host.as_str(),
             "GitLab refused an issue listing"
         );
         return Err(status_error(status, &source.repository, credential));
@@ -420,7 +519,7 @@ pub fn retry_after(
     Some(Duration::from_secs(wait.clamp(300, 86400)))
 }
 
-/// The token to read `host` as and where it came from, in
+/// The token to read instance `host` as and where it came from, in
 /// [`account::lookup`]'s order. Blocks on the credential store and a
 /// subprocess: call it from a worker.
 pub fn token(host: &str, store: herdr_credentials::Store) -> Option<account::Found> {
