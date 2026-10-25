@@ -2337,14 +2337,18 @@ prompt profiles from `~/.config/agent-launcher/agents/<name>/prompt.md` (the
 built-in prompt when none is chosen). GitHub is read as the account used
 for pull requests on that host. A GitLab remote, on gitlab.com or a
 self-managed host, lists its open issues (not yet its merge requests), read
-with `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN` when `GITLAB_HOST` names that host
-(gitlab.com by default), else with a token saved in Settings > GitLab, else
+with the `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN` the checkout's `.envrc` sets
+(loaded through direnv, for a checkout on this computer whose `.envrc` you
+allowed), else with your login shell's when `GITLAB_HOST` names that instance
+(gitlab.com by default), else with a token pasted in the account menu, else
 with the GitLab CLI's sign-in (`glab auth login`), and sent only over HTTPS;
-public projects need none, and an `http://` remote is read without one. When
-GitLab needs a token or refuses one, the source shows "sign in", which opens
-Settings > GitLab: it lists each instance with where its token comes from and
-whom it signs in as, and checks a pasted personal access token (scope
-`read_api`) before saving it in the credential store. A remote on an SSH host
+public projects need none, and an `http://` remote is read without one. The
+account button at the top right of the title bar switches between GitHub and
+GitLab: the GitLab side lists each instance with where its token comes from
+and whom it signs in as, and checks a pasted personal access token (scope
+`read_api`) before saving it in the credential store. When GitLab needs a
+token, the button shows a dot and the source shows "sign in", which opens that
+page. A remote on an SSH host
 of its own, such as `git@gitlab-ssh.example.com:group/project.git` for an
 instance served at `gitlab.example.com`, is read from the instance whose
 `ssh_host` the GitLab CLI's config names it, at that instance's `api_host` and

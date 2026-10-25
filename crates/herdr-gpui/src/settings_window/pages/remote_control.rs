@@ -38,7 +38,19 @@ pub(in crate::settings_window) struct RemoteSettings {
 
 /// Opens Settings at Remote control, as the status bar's phone does.
 pub(crate) fn open(source: WeakEntity<crate::HerdrWindow>, cx: &mut App) {
-    crate::settings_window::open_at(source, Section::RemoteControl, cx);
+    crate::settings_window::open(source, cx);
+    // Queued after `open`'s own deferred work, so the window exists by now.
+    cx.defer(|cx| {
+        let Some(handle) = cx
+            .default_global::<crate::settings_window::SettingsWindowHandle>()
+            .window
+        else {
+            return;
+        };
+        let _ = handle.update(cx, |view, window, cx| {
+            view.select_section(Section::RemoteControl, window, cx);
+        });
+    });
 }
 
 /// "All interfaces", then each address the daemon serves on, then the

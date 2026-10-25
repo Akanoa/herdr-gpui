@@ -198,7 +198,7 @@ pub struct Config {
     /// Focus the split terminal pane under the pointer without clicking.
     pub focus_follows_mouse: bool,
     pub github: GitHubConfig,
-    /// Where tokens pasted in Settings > GitLab are saved.
+    /// Where GitLab tokens pasted in the account menu are saved.
     pub gitlab: GitLabConfig,
     /// Font resolution searched for an icon font for the terminal and found
     /// none installed, so Private Use Area glyphs draw as missing-glyph boxes.

@@ -445,12 +445,6 @@ pub(super) const CATALOG: &[Entry] = &[
         "Agents such as Claude Code, Codex, Gemini CLI, or OpenCode, and a setup script, installed when a new cloud device first connects.",
     ),
     entry(
-        Section::GitLab,
-        "gitlab-token",
-        "GitLab token",
-        "A personal access token the Orchestrator reads a GitLab host's issues with, saved in the credential store.",
-    ),
-    entry(
         Section::RemoteControl,
         "remote-enabled",
         "Remote control",

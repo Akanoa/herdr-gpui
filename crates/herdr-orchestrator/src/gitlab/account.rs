@@ -1,77 +1,94 @@
-//! Which token a GitLab host is read with, where it came from, and whom
-//! GitLab takes it for: what Settings > GitLab shows for each host.
+//! Which token a GitLab instance is read with, where it came from, and whom
+//! GitLab takes it for: what the title bar's account menu shows for each.
 
-use super::{Api, Error, Scheme, TIMEOUT, authorization, cli_token, environment_token, saved};
+use super::{
+    Api, Error, Scheme, TIMEOUT, authorization, cli_token, environment_token, envrc, saved,
+};
 use herdr_credentials::Store;
 use secrecy::SecretString;
 use serde::Deserialize;
-use std::{ffi::OsString, io::Read};
+use std::{ffi::OsString, io::Read, path::Path};
 
 /// The answer to `/user` is a small object; anything larger is refused.
 const LIMIT: u64 = 64 * 1024;
 
-/// Where a host's token came from, in the order they are tried.
+/// Where a token came from, in the order they are tried.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN`, for the host `GITLAB_HOST` names.
+    /// `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN` that the checkout's `.envrc`
+    /// sets, as direnv loads it there.
+    Envrc,
+    /// `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN` in the login shell, for the
+    /// instance `GITLAB_HOST` names.
     Environment,
-    /// Pasted in Settings > GitLab.
+    /// Pasted in the account menu.
     Saved,
     /// The GitLab CLI's own sign-in (`glab auth login`).
     Cli,
 }
 
-/// A host's token and where it came from.
+/// A token and where it came from.
 pub struct Found {
     pub token: SecretString,
     pub source: Source,
 }
 
-/// The token to read `host` as: the environment's when it is meant for this
-/// host, else the one saved in `store`, else the GitLab CLI's. A store that
-/// cannot be read is skipped, so the CLI's sign-in still serves. Blocks on
-/// the store and a subprocess: call it from a worker.
-pub fn lookup(host: &str, store: Store) -> Option<Found> {
+/// The token to read instance `host` as: the one `checkout`'s `.envrc` sets,
+/// then the login shell's when it is meant for this instance, then the one
+/// saved in `store`, then the GitLab CLI's. `checkout` is a folder on this
+/// computer, or `None` for a remote one, whose `.envrc` is not run here. A
+/// store that cannot be read is skipped, so the CLI's sign-in still serves.
+/// Blocks on direnv, the store, and the CLI: call it from a worker.
+pub fn lookup(host: &str, store: Store, checkout: Option<&Path>) -> Option<Found> {
+    let saved = || match saved::read(store) {
+        Ok(saved) => saved.get(host).cloned(),
+        Err(error) => {
+            tracing::warn!(
+                category = "orchestrator_gitlab",
+                %error,
+                "Saved GitLab tokens could not be read"
+            );
+            None
+        }
+    };
     resolve(
         host,
-        |name| std::env::var_os(name),
-        || match saved::read(store) {
-            Ok(saved) => saved.get(host).cloned(),
-            Err(error) => {
-                tracing::warn!(
-                    category = "orchestrator_gitlab",
-                    %error,
-                    "Saved GitLab tokens could not be read"
-                );
-                None
-            }
-        },
+        || checkout.and_then(|checkout| envrc::token(checkout, host)),
+        herdr_client::login_env::var,
+        saved,
         || cli_token(host),
     )
 }
 
-/// [`lookup`] with the host's saved token already read, so a caller listing
-/// many hosts reads the store once. Blocks on a subprocess.
-pub fn lookup_with(host: &str, saved: Option<SecretString>) -> Option<Found> {
+/// [`lookup`] with the instance's saved token already read, so a caller
+/// listing many instances reads the store once. Blocks on direnv and the CLI.
+pub fn lookup_with(
+    host: &str,
+    saved: Option<SecretString>,
+    checkout: Option<&Path>,
+) -> Option<Found> {
     resolve(
         host,
-        |name| std::env::var_os(name),
+        || checkout.and_then(|checkout| envrc::token(checkout, host)),
+        herdr_client::login_env::var,
         || saved,
         || cli_token(host),
     )
 }
 
-/// [`lookup`]'s order over the given environment, saved token, and CLI;
-/// a later one is asked only when every earlier one has no token.
+/// [`lookup`]'s order over the given `.envrc` token, environment, saved
+/// token, and CLI; a later one is asked only when every earlier one has none.
 pub fn resolve(
     host: &str,
+    envrc: impl FnOnce() -> Option<SecretString>,
     variable: impl Fn(&str) -> Option<OsString>,
     saved: impl FnOnce() -> Option<SecretString>,
     cli: impl FnOnce() -> Option<SecretString>,
 ) -> Option<Found> {
     let found = |source| move |token| Found { token, source };
-    environment_token(host, variable)
-        .map(found(Source::Environment))
+    envrc()
+        .map(found(Source::Envrc))
+        .or_else(|| environment_token(host, variable).map(found(Source::Environment)))
         .or_else(|| saved().map(found(Source::Saved)))
         .or_else(|| cli().map(found(Source::Cli)))
 }

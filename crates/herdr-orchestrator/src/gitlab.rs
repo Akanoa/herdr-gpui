@@ -2,17 +2,18 @@
 //! agent-launcher's GitLab row format: `native_id` is the issue's project
 //! `iid`. Every sync is a complete listing, so it may replace the cache.
 //!
-//! The token comes from `GITLAB_TOKEN` (or `GITLAB_ACCESS_TOKEN`) for the host
-//! `GITLAB_HOST` names, gitlab.com by default, else from the one Settings >
-//! GitLab saved for the remote's instance (`saved`), else from the GitLab
-//! CLI's own sign-in there (`account`). Without one, public projects still
-//! list.
+//! The token comes from the `GITLAB_TOKEN` (or `GITLAB_ACCESS_TOKEN`) a local
+//! checkout's `.envrc` sets (`envrc`), else from the login shell's for the
+//! instance `GITLAB_HOST` names, gitlab.com by default, else from the one
+//! pasted in the account menu (`saved`), else from the GitLab CLI's own
+//! sign-in there (`account`). Without one, public projects still list.
 //!
 //! A remote on an SSH host of its own, such as `gitlab-ssh.example.com` for
 //! an instance served at `gitlab.example.com`, is read from the instance
 //! whose `ssh_host` the GitLab CLI's config names it, as glab itself does.
 
 pub mod account;
+pub mod envrc;
 pub mod saved;
 
 use super::{Activity, Checkpoint, Item, ItemKey, Provider, SourceKey};
@@ -64,18 +65,24 @@ pub enum Error {
     Address(String),
     #[error("The GitLab token is not one an HTTP header can carry")]
     Token,
-    #[error("GitLab shows {repository} only when signed in: add a token in Settings > GitLab")]
+    #[error(
+        "GitLab shows {repository} only when signed in: add a token from the account button at the top right"
+    )]
     SignIn { repository: String },
     #[error(
         "GitLab shows {repository} only when signed in, and a token is never sent over plain HTTP: use an https:// remote"
     )]
     InsecureRemote { repository: String },
-    #[error("GitLab refused the token; replace it in Settings > GitLab")]
+    #[error("GitLab refused the token; replace it from the account button at the top right")]
     Authentication,
     #[error(
-        "GitLab refused GITLAB_TOKEN; change or unset it, since it is tried before a token saved in Settings > GitLab"
+        "GitLab refused GITLAB_TOKEN; change or unset it, since it is tried before a token saved in the app"
     )]
     EnvironmentRefused,
+    #[error(
+        "GitLab refused the GITLAB_TOKEN this checkout's .envrc sets; change it there, since it is tried first"
+    )]
+    EnvrcRefused,
     #[error("GitLab refused the token's access; it needs the read_api scope")]
     Scope,
     #[error("GitLab refused access to {repository}; the token needs the read_api scope")]
@@ -147,6 +154,7 @@ impl Error {
                 | Self::InsecureRemote { .. }
                 | Self::Authentication
                 | Self::EnvironmentRefused
+                | Self::EnvrcRefused
                 | Self::Scope
                 | Self::Forbidden { .. }
                 | Self::NotFound { .. }
@@ -160,11 +168,12 @@ impl Error {
     }
 
     /// The same failure for a token from `source`: a refused `GITLAB_TOKEN`
-    /// asks for that variable to change, since a token saved in Settings >
-    /// GitLab is only tried after it.
+    /// asks for the shell or `.envrc` that sets it to change, since a token
+    /// saved in the app is only tried after it.
     pub fn from_source(self, source: account::Source) -> Self {
         match (self, source) {
             (Self::Authentication, account::Source::Environment) => Self::EnvironmentRefused,
+            (Self::Authentication, account::Source::Envrc) => Self::EnvrcRefused,
             (error, _) => error,
         }
     }
@@ -262,8 +271,8 @@ impl Api {
         }
     }
 
-    /// The API of instance `host`, as named in Settings > GitLab or by a
-    /// saved token: the GitLab CLI's `api_host` and `api_protocol` for it,
+    /// The API of instance `host`, as typed in the account menu or named by
+    /// a saved token: the GitLab CLI's `api_host` and `api_protocol` for it,
     /// else the instance itself over HTTPS.
     pub fn of_instance(host: &str, cli: &[cli_hosts::CliHost]) -> Self {
         let named = cli
@@ -522,8 +531,12 @@ pub fn retry_after(
 /// The token to read instance `host` as and where it came from, in
 /// [`account::lookup`]'s order. Blocks on the credential store and a
 /// subprocess: call it from a worker.
-pub fn token(host: &str, store: herdr_credentials::Store) -> Option<account::Found> {
-    account::lookup(host, store)
+pub fn token(
+    host: &str,
+    store: herdr_credentials::Store,
+    checkout: Option<&std::path::Path>,
+) -> Option<account::Found> {
+    account::lookup(host, store, checkout)
 }
 
 /// The GitLab CLI's environment token, sent only to the host it names, so a

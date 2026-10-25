@@ -8,7 +8,6 @@ use std::sync::{
 
 mod activity_bar_windows;
 mod config_watch;
-mod gitlab;
 mod gpu_settings;
 #[cfg(windows)]
 mod launch_at_login;

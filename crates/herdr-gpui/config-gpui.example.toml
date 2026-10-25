@@ -535,11 +535,11 @@ size = 12
 # every other repository with the main sign-in. At most 8 accounts.
 # accounts = [{ id = "0123456789abcdef0123456789abcdef", owners = ["my-emu-org"] }]
 
-# GitLab tokens the Orchestrator reads issues with. Settings > GitLab checks a
-# pasted personal access token (scope read_api) and saves it per host in the
-# credential store; tokens are never read from this file. GITLAB_TOKEN takes
-# precedence for its host, and the GitLab CLI's sign-in serves a host without
-# a saved token.
+# GitLab tokens the Orchestrator reads issues with: GITLAB_TOKEN from the
+# checkout's .envrc (through direnv), then from your login shell, then one
+# pasted in the title bar's account menu (scope read_api; checked with GitLab,
+# then saved per instance in the credential store), then the GitLab CLI's
+# sign-in. Tokens are never read from this file.
 # [gitlab]
 # Same meaning as [github] allow_plaintext_credentials, for the saved tokens,
 # which are kept in their own 0600 gitlab-credentials file. Default is false.

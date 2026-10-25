@@ -2,7 +2,7 @@
 //! provider, so GitLab opens its own page rather than GitHub's.
 use super::*;
 use crate::orchestrator::{
-    Request, SourceStatus, SyncState, Timing,
+    GitLabRead, Request, SourceStatus, SyncState, Timing,
     view::{Event, Look, OrchestratorView},
 };
 use gpui::{AppContext as _, Modifiers, TestAppContext};
@@ -65,13 +65,20 @@ fn a_gitlab_source_waiting_for_a_token_asks_for_the_gitlab_sign_in(cx: &mut Test
     cx.simulate_click(chip.center(), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(*asked.borrow(), [Provider::Gitlab]);
-    let hosts: Vec<(String, Scheme)> = cx.update(|_, cx| {
-        view.read(cx)
-            .gitlab_hosts()
-            .map(|(host, scheme)| (host.to_owned(), scheme))
-            .collect()
+    let (hosts, waiting): (Vec<GitLabRead>, bool) = cx.update(|_, cx| {
+        let view = view.read(cx);
+        (view.gitlab_hosts().collect(), view.gitlab_needs_sign_in())
     });
-    assert_eq!(hosts, [("gitlab.com".to_owned(), Scheme::Https)]);
+    assert_eq!(
+        hosts,
+        [GitLabRead {
+            host: "gitlab.com".into(),
+            scheme: Scheme::Https,
+            // A checkout on this computer, whose .envrc may hold a token.
+            checkout: Some(dir.path().to_path_buf()),
+        }]
+    );
+    assert!(waiting);
 }
 
 #[gpui::test]
@@ -124,9 +131,29 @@ fn settings_lists_the_gitlab_hosts_of_every_window(cx: &mut TestAppContext) {
     let mut listed: Vec<String> = cx.update(|cx| {
         crate::HerdrWindow::all_orchestrator_gitlab_hosts(cx)
             .into_iter()
-            .map(|(host, _)| host)
+            .map(|read| read.host)
             .collect()
     });
     listed.sort();
     assert_eq!(listed, ["code.internal:8080", "gitlab.example.com"]);
+}
+
+#[gpui::test]
+fn the_gitlab_sign_in_opens_the_account_menus_gitlab_page(cx: &mut TestAppContext) {
+    let (window, cx) = cx.add_window_view(crate::sidebar::layout_tests::fixture_window);
+    cx.run_until_parked();
+    let mut sign_in = |provider| {
+        cx.update(|win, cx| {
+            window.update(cx, |window, cx| {
+                let id = window.sections_view(cx);
+                window
+                    .orchestrator_events
+                    .push((id, Event::SignIn(provider)));
+                window.poll_orchestrators(win, cx);
+                window.menu.page
+            })
+        })
+    };
+    assert!(sign_in(Provider::Gitlab) == Some(crate::menu::Page::GitLab));
+    assert!(sign_in(Provider::Github) == Some(crate::menu::Page::GitHub));
 }

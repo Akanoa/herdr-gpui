@@ -94,7 +94,7 @@ pub struct Request {
     /// The accounts GitHub is read with; each source uses the one that
     /// reads its repository's owner.
     pub token: Option<Tokens>,
-    /// Where tokens pasted in Settings > GitLab are saved.
+    /// Where GitLab tokens pasted in the account menu are saved.
     pub gitlab_store: herdr_credentials::Store,
     /// The folder holding the databases, and agent-launcher's to carry
     /// over, in place of the platform's; tests set it.
@@ -875,7 +875,10 @@ impl Worker {
                     .as_ref()
                     .is_none_or(|(instance, _)| *instance != api.instance)
                 {
-                    let token = gitlab::token(&api.instance, self.request.gitlab_store);
+                    // A remote checkout's .envrc is that machine's, not run here.
+                    let checkout = (!self.request.target.is_remote())
+                        .then(|| std::path::Path::new(&self.request.checkout));
+                    let token = gitlab::token(&api.instance, self.request.gitlab_store, checkout);
                     self.gitlab_token = Some((api.instance.clone(), token));
                 }
                 let token = self

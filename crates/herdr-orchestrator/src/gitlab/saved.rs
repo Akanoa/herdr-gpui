@@ -1,4 +1,4 @@
-//! Tokens pasted in Settings > GitLab, one per host, kept together in one
+//! GitLab tokens pasted in the account menu, one per host, kept together in one
 //! credential-store record of `host<TAB>token` lines: the desktop keyring, or
 //! the private `gitlab-credentials` file when `[gitlab]
 //! allow_plaintext_credentials` opts in. Every read and write blocks on the
@@ -92,7 +92,7 @@ impl Saved {
     }
 }
 
-/// A host as `Settings > GitLab` and remotes name it: lowercase, its port
+/// A host as the account menu and remotes name it: lowercase, its port
 /// kept, and any `https://` or trailing `/` a pasted address carries dropped.
 pub fn normalize_host(input: &str) -> Option<String> {
     let host = super::configured_host(input).to_ascii_lowercase();

@@ -158,6 +158,8 @@ pub(crate) struct MenuState {
     pub(super) github_token: Option<Entity<crate::search_input::SearchInput>>,
     /// Logins this window already toasted as waiting on GitHub App approval.
     pub(super) github_toasted: std::collections::HashSet<String>,
+    /// The GitLab page's instances, fields, and work under way.
+    pub(crate) gitlab: super::gitlab::GitLabMenu,
     /// Saved devices whose removal is running, by endpoint ID. Kept after
     /// success until the catalog drops the device, so its header pulses
     /// until it disappears; the confirmation closes as soon as it starts.
@@ -392,6 +394,7 @@ impl MenuState {
             github_adding: None,
             github_token: None,
             github_toasted: Default::default(),
+            gitlab: Default::default(),
             removing_devices: Default::default(),
             github_selected: None,
             github_scroll: ScrollHandle::new(),

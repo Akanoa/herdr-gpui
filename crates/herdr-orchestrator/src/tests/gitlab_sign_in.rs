@@ -1,4 +1,4 @@
-//! Tokens pasted in Settings > GitLab: the saved record, the order tokens
+//! GitLab tokens pasted in the account menu: the saved record, the order tokens
 //! are tried in, and which failures ask the user to sign in.
 use crate::gitlab::{
     self, Credential,
@@ -135,7 +135,7 @@ fn a_malformed_record_is_refused_unread() {
     assert_eq!(Saved::parse(&secret("")).unwrap().hosts().count(), 0);
 }
 
-fn environment(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+pub(super) fn environment(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
     let pairs: Vec<(String, OsString)> = pairs
         .iter()
         .map(|(key, value)| ((*key).to_owned(), OsString::from(value)))
@@ -159,6 +159,7 @@ fn the_environment_beats_a_saved_token_which_beats_the_cli() {
     let found = |pairs: &[(&str, &str)], saved: Option<&str>, cli: Option<&str>| {
         resolve(
             "gitlab.com",
+            || None,
             environment(pairs),
             || saved.map(secret),
             || cli.map(secret),
@@ -185,11 +186,12 @@ fn the_environment_beats_a_saved_token_which_beats_the_cli() {
     // saved token; one meant for it never asks the store.
     let elsewhere = [("GITLAB_HOST", "gitlab.acme.com"), ("GITLAB_TOKEN", "x")];
     assert_eq!(
-        resolve("gitlab.com", environment(&elsewhere), saved, cli).map(|found| found.source),
+        resolve("gitlab.com", || None, environment(&elsewhere), saved, cli)
+            .map(|found| found.source),
         Some(Source::Saved)
     );
     assert_eq!(asked.get(), 1);
-    resolve("gitlab.com", environment(&env), saved, cli);
+    resolve("gitlab.com", || None, environment(&env), saved, cli);
     assert_eq!(asked.get(), 1);
 }
 

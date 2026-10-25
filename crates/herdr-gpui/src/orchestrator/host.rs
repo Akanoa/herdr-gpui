@@ -6,7 +6,9 @@
 //! agents, and each host's GitHub account, and acts on its events. The view
 //! itself knows nothing of its host.
 
-use super::{Event, LiveAgent, LiveBranch, Look, OrchestratorView, RepoSpec, Request, Timing};
+use super::{
+    Event, GitLabRead, LiveAgent, LiveBranch, Look, OrchestratorView, RepoSpec, Request, Timing,
+};
 use crate::{
     HerdrWindow, NavigationTarget,
     browser::{OrchestratorRepo, WebUrl},
@@ -230,12 +232,8 @@ impl HerdrWindow {
             .map(|orchestrator| &orchestrator.view)
     }
 
-    /// The GitLab hosts this window's views read, each with the scheme a
-    /// remote reads it over, for Settings > GitLab.
-    pub(crate) fn orchestrator_gitlab_hosts(
-        &self,
-        cx: &App,
-    ) -> Vec<(String, herdr_orchestrator::gitlab::Scheme)> {
+    /// The GitLab projects this window's views read, for the account menu.
+    pub(crate) fn orchestrator_gitlab_hosts(&self, cx: &App) -> Vec<GitLabRead> {
         self.orchestrators
             .values()
             .flat_map(|orchestrator| {
@@ -243,17 +241,15 @@ impl HerdrWindow {
                     .view
                     .read(cx)
                     .gitlab_hosts()
-                    .map(|(host, scheme)| (host.to_owned(), scheme))
                     .collect::<Vec<_>>()
             })
             .collect()
     }
 
-    /// [`Self::orchestrator_gitlab_hosts`] over every main window, since a
-    /// saved token serves them all.
-    pub(crate) fn all_orchestrator_gitlab_hosts(
-        cx: &App,
-    ) -> Vec<(String, herdr_orchestrator::gitlab::Scheme)> {
+    /// [`Self::orchestrator_gitlab_hosts`] over every other main window,
+    /// since a saved token serves them all. A window being updated, such as
+    /// the caller's own, cannot be read and is left out.
+    pub(crate) fn all_orchestrator_gitlab_hosts(cx: &App) -> Vec<GitLabRead> {
         cx.windows()
             .into_iter()
             .filter_map(|handle| handle.downcast::<HerdrWindow>())
@@ -262,7 +258,27 @@ impl HerdrWindow {
             .collect()
     }
 
-    /// A saved sign-in changed, such as in Settings > GitLab: every view in
+    /// One of this window's views has a GitLab source waiting for a token,
+    /// which the title bar's account button marks.
+    pub(crate) fn orchestrator_gitlab_needs_sign_in(&self, cx: &App) -> bool {
+        self.orchestrators
+            .values()
+            .any(|orchestrator| orchestrator.view.read(cx).gitlab_needs_sign_in())
+    }
+
+    /// [`Self::refresh_all_orchestrators`] from inside this window's own
+    /// update, which leaves this window out, so its views sync here first.
+    pub(crate) fn credentials_changed_everywhere(&mut self, cx: &mut Context<Self>) {
+        for orchestrator in self.orchestrators.values() {
+            orchestrator
+                .view
+                .update(cx, |view, cx| view.credentials_changed(cx));
+        }
+        Self::refresh_all_orchestrators(cx);
+    }
+
+    /// A saved sign-in changed, such as a GitLab token pasted in the account
+    /// menu: every view in
     /// every main window syncs again, so a new token shows without pressing
     /// Refresh. Each window keeps its own views and workers.
     pub(crate) fn refresh_all_orchestrators(cx: &mut App) {
@@ -502,12 +518,13 @@ impl HerdrWindow {
                 }
                 Err(_) => self.tell_orchestrator(id, super::Error::NotWebAddress, cx),
             },
-            Event::SignIn(super::Provider::Gitlab) => {
-                crate::settings_window::open_gitlab(cx.entity().downgrade(), cx);
-            }
-            Event::SignIn(_) => {
+            Event::SignIn(provider) => {
                 if self.open_menu(window, cx) {
-                    self.menu.page = Some(crate::menu::Page::GitHub);
+                    if provider == super::Provider::Gitlab {
+                        self.open_gitlab_page(window, cx);
+                    } else {
+                        self.menu.page = Some(crate::menu::Page::GitHub);
+                    }
                 }
                 cx.notify();
             }
