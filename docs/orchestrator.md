@@ -109,13 +109,22 @@ Its token is looked up once per view on the worker, and again on Refresh:
 A missing or refused token (`SignIn`, `Authentication`) shows the source as
 "sign in", as a signed-out GitHub does, and the chip opens Settings > GitLab;
 it still waits 30 minutes before the next try, which Refresh skips. Other
-refusals, such as a token without the `read_api` scope, stay failures.
+refusals, such as a token without the `read_api` scope, stay failures, and so
+does a refused `GITLAB_TOKEN` (`EnvironmentRefused`): a saved token is only
+tried after it, so the message asks for the variable to change or go instead.
 
-Settings > GitLab lists each GitLab host the open views read, and every host
-with a saved token, with where its token comes from and whom GitLab signs it
-in as (`/api/v4/user`, always over HTTPS; `gitlab/account.rs`). A pasted
-personal access token is checked that way before it is saved, and saving or
-forgetting one makes every view sync again. Saved tokens are one
+Settings > GitLab lists each GitLab host the open views of every window read,
+and every host with a saved token, once each by its lowercase name, with where
+its token comes from and whom GitLab signs it in as (`/api/v4/user`, always
+over HTTPS; `gitlab/account.rs`). The saved record is read once and each host
+is checked on its own, so a slow host never holds the others' rows. A host
+every remote reads over plain `http://` takes no token, so its row says so
+and the page refuses to save one for it. A pasted personal access token is
+checked with GitLab before it is saved, stays in its field until the save
+succeeds, and saving or forgetting one makes every view sync again. A saved
+record not in the expected form is reported on the page and replaced by the
+next save or forget; a store that cannot be read at all is never
+overwritten. Saved tokens are one
 credential-store record of `host<TAB>token` lines, at most 16 hosts: the
 desktop keyring (`dev.herdr.gpui.gitlab`), or with `[gitlab]
 allow_plaintext_credentials = true` the private `0600` `gitlab-credentials`

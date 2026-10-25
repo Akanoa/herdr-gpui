@@ -8,41 +8,61 @@ use super::{SettingsWindow, ui};
 use crate::{search_input::SearchInput, settings_window::Section};
 use gpui::{prelude::*, *};
 use herdr_orchestrator::gitlab::{
-    self,
+    self, Scheme,
     account::{self, Source},
     saved,
 };
 use secrecy::SecretString;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// gitlab.com, listed when no repository names another host.
 const DEFAULT_HOST: &str = "gitlab.com";
 /// What a save or forget says in a window that keeps no saved credential.
 const NO_STORE: &str = "This window does not keep GitLab tokens.";
 
+/// What is known of a host's token.
+pub(in crate::settings_window) enum Token {
+    /// Not looked up yet.
+    Unknown,
+    None,
+    Found {
+        /// The token the host is read with, which may not be the saved one.
+        source: Source,
+        /// Whom GitLab signs the token in as, once asked.
+        user: Option<Result<String, Arc<gitlab::Error>>>,
+    },
+}
+
 /// One host the page lists.
 pub(in crate::settings_window) struct HostStatus {
     pub(in crate::settings_window) host: String,
-    /// The token the host is read with, which may not be the saved one.
-    pub(in crate::settings_window) source: Option<Source>,
+    /// Every remote reads the host over plain HTTP, so no token is sent to
+    /// it or checked with it.
+    pub(in crate::settings_window) plain: bool,
     /// A token is saved for the host, so Forget is offered even while
     /// `GITLAB_TOKEN` takes precedence over it.
     pub(in crate::settings_window) saved: bool,
-    /// Whom GitLab signs the token in as, once asked.
-    pub(in crate::settings_window) user: Option<Result<String, Arc<gitlab::Error>>>,
+    pub(in crate::settings_window) token: Token,
 }
 
 /// The page's state while it shows.
 #[derive(Default)]
 pub(in crate::settings_window) struct GitLabSettings {
     pub(in crate::settings_window) hosts: Vec<HostStatus>,
+    /// The source window's hosts, which the host field starts at first.
+    preferred: Vec<String>,
     host: Option<Entity<SearchInput>>,
     token: Option<Entity<SearchInput>>,
     /// A save or forget under way; the buttons wait for it.
     working: bool,
     pub(in crate::settings_window) message: Option<String>,
-    /// The lookup under way, replaced by the next one.
+    /// Why the saved tokens could not be read, shown above the hosts.
+    pub(in crate::settings_window) problem: Option<String>,
+    /// The saved-token read under way, replaced by the next one.
     _task: Option<Task<()>>,
+    /// Each host's lookup, landing on its own row as it finishes, so one
+    /// slow host never holds the others. Replaced by the next check.
+    _lookups: Vec<Task<()>>,
     /// The save or forget under way. Kept apart from lookups, which reopening
     /// the page starts again, so its result is still shown and acted on.
     _save: Option<Task<()>>,
@@ -61,19 +81,7 @@ impl GitLabSettings {
 
 /// Opens Settings at GitLab, as the Orchestrator's "sign in" does.
 pub(crate) fn open(source: WeakEntity<crate::HerdrWindow>, cx: &mut App) {
-    crate::settings_window::open(source, cx);
-    // Queued after `open`'s own deferred work, so the window exists by now.
-    cx.defer(|cx| {
-        let Some(handle) = cx
-            .default_global::<crate::settings_window::SettingsWindowHandle>()
-            .window
-        else {
-            return;
-        };
-        let _ = handle.update(cx, |view, window, cx| {
-            view.select_section(Section::GitLab, window, cx);
-        });
-    });
+    crate::settings_window::open_at(source, Section::GitLab, cx);
 }
 
 /// Where a token came from, as the page says it.
@@ -87,17 +95,32 @@ fn source_label(source: Source) -> &'static str {
 
 /// What a host's row says.
 pub(in crate::settings_window) fn status_line(status: &HostStatus) -> String {
-    let Some(source) = status.source else {
-        return "No token. Public projects still list; paste a token below for private ones."
+    if status.plain {
+        return "Read over plain HTTP, so no token is sent. Use an https:// remote for private \
+                projects."
             .to_owned();
+    }
+    let (source, user) = match &status.token {
+        Token::Unknown => return "Looking for a token\u{2026}".to_owned(),
+        Token::None => {
+            return "No token. Public projects still list; paste a token below for private ones."
+                .to_owned();
+        }
+        Token::Found { source, user } => (*source, user),
     };
     let from = source_label(source);
-    match &status.user {
+    match user {
         None => format!("Checking the token {from}\u{2026}"),
         Some(Ok(user)) => format!("Signed in as {user}, {from}."),
         // The error's own text sends the user here, so this page says it plainly.
         Some(Err(error)) if matches!(**error, gitlab::Error::Authentication) => {
             format!("GitLab refused the token {from}. Paste a new one below.")
+        }
+        // A pasted token is only tried after GITLAB_TOKEN, so it cannot help.
+        Some(Err(error)) if matches!(**error, gitlab::Error::EnvironmentRefused) => {
+            "GitLab refused GITLAB_TOKEN. Change or unset it: a token saved here is only tried \
+             after it."
+                .to_owned()
         }
         Some(Err(error)) => format!("{error}. The token is {from}."),
     }
@@ -108,33 +131,39 @@ fn new_token_url(host: &str) -> String {
     format!("https://{host}/-/user_settings/personal_access_tokens?name=Herdr%20UI&scopes=read_api")
 }
 
-/// Every host's token and whom it signs in as. Blocks: run it off the UI thread.
-fn check(hosts: Vec<String>, store: herdr_credentials::Store) -> Vec<HostStatus> {
-    let mut hosts = hosts;
-    let saved = saved::read(store).unwrap_or_default();
-    hosts.extend(saved.hosts().map(str::to_owned));
-    if hosts.is_empty() {
-        hosts.push(DEFAULT_HOST.to_owned());
+/// The hosts listed, by normalized name: plain only when every remote
+/// reads it over HTTP, since one HTTPS remote is enough to send a token.
+pub(in crate::settings_window) fn merge_hosts(
+    listed: impl IntoIterator<Item = (String, Scheme)>,
+    saved: impl IntoIterator<Item = String>,
+) -> BTreeMap<String, bool> {
+    let mut hosts = BTreeMap::new();
+    let listed = listed.into_iter().map(|(host, scheme)| {
+        let host = saved::normalize_host(&host).unwrap_or(host);
+        (host, scheme == Scheme::Http)
+    });
+    for (host, plain) in listed.chain(saved.into_iter().map(|host| (host, false))) {
+        *hosts.entry(host).or_insert(plain) &= plain;
     }
-    hosts.sort();
-    hosts.dedup();
+    if hosts.is_empty() {
+        hosts.insert(DEFAULT_HOST.to_owned(), false);
+    }
     hosts
-        .into_iter()
-        .map(|host| match account::lookup(&host, store) {
-            Some(found) => HostStatus {
-                user: Some(account::whoami(&host, &found.token).map_err(Arc::new)),
-                source: Some(found.source),
-                saved: saved.get(&host).is_some(),
-                host,
-            },
-            None => HostStatus {
-                host,
-                source: None,
-                saved: false,
-                user: None,
-            },
-        })
-        .collect()
+}
+
+/// A host's token and whom it signs in as. Blocks on `glab` and the
+/// network: run it off the UI thread.
+fn check_host(host: &str, saved: Option<SecretString>) -> Token {
+    match account::lookup_with(host, saved) {
+        Some(found) => Token::Found {
+            user: Some(
+                account::whoami(host, &found.token)
+                    .map_err(|error| Arc::new(error.from_source(found.source))),
+            ),
+            source: found.source,
+        },
+        None => Token::None,
+    }
 }
 
 impl SettingsWindow {
@@ -174,48 +203,137 @@ impl SettingsWindow {
             .then(|| self.config.gitlab.store())
     }
 
-    /// Looks every host up again: the Orchestrator's GitLab hosts and those
-    /// with a saved token. Without a store the page still lists gitlab.com.
+    /// Lists every main window's GitLab hosts and those with a saved
+    /// token, then looks each up on its own. Without a store the page still
+    /// lists the hosts, with no token.
     fn check_gitlab(&mut self, cx: &mut Context<Self>) {
-        let hosts = self
+        let listed = crate::HerdrWindow::all_orchestrator_gitlab_hosts(cx);
+        self.gitlab.preferred = self
             .source
             .read_with(cx, |window, cx| window.orchestrator_gitlab_hosts(cx))
-            .unwrap_or_default();
-        let shown = if hosts.is_empty() {
-            vec![DEFAULT_HOST.to_owned()]
-        } else {
-            hosts.clone()
-        };
-        self.gitlab.hosts = shown
+            .unwrap_or_default()
             .into_iter()
-            .map(|host| HostStatus {
-                host,
-                source: None,
-                saved: false,
-                user: None,
-            })
+            .map(|(host, _)| saved::normalize_host(&host).unwrap_or(host))
             .collect();
+        self.gitlab._lookups.clear();
         let Some(store) = self.gitlab_store(cx) else {
+            self.gitlab._task = None;
+            self.gitlab.problem = None;
+            self.show_gitlab_hosts(merge_hosts(listed, []), |_| false, || Token::None);
             return;
         };
-        let task = cx.background_spawn(async move { check(hosts, store) });
+        self.show_gitlab_hosts(
+            merge_hosts(listed.clone(), []),
+            |_| false,
+            || Token::Unknown,
+        );
+        let read = cx.background_spawn(async move { saved::read(store) });
         self.gitlab._task = Some(cx.spawn(async move |this, cx| {
-            let hosts = task.await;
+            let saved = read.await;
             let _ = this.update(cx, |this, cx| {
-                // The host field starts at the first host still needing a token.
-                if let Some(input) = &this.gitlab.host
-                    && input.read(cx).text().is_empty()
-                    && let Some(status) = hosts
-                        .iter()
-                        .find(|status| !matches!(status.user, Some(Ok(_))))
-                {
-                    let host = status.host.clone();
-                    input.update(cx, |input, cx| input.set_text_selected(&host, cx));
-                }
-                this.gitlab.hosts = hosts;
+                this.gitlab.problem = saved.as_ref().err().map(|error| match error {
+                    gitlab::Error::Record => {
+                        format!("{error}. Saving or forgetting a token replaces them.")
+                    }
+                    error => error.to_string(),
+                });
+                let saved = saved.unwrap_or_default();
+                let hosts = merge_hosts(listed, saved.hosts().map(str::to_owned));
+                this.show_gitlab_hosts(hosts, |host| saved.get(host).is_some(), || Token::Unknown);
+                let lookups = this
+                    .gitlab
+                    .hosts
+                    .iter()
+                    .filter(|status| !status.plain)
+                    .map(|status| (status.host.clone(), saved.get(&status.host).cloned()))
+                    .collect::<Vec<_>>();
+                this.gitlab._lookups = lookups
+                    .into_iter()
+                    .map(|(host, token)| this.look_up_gitlab_host(host, token, cx))
+                    .collect();
+                this.finish_gitlab_check(cx);
                 cx.notify();
             });
         }));
+    }
+
+    /// Lists `hosts`, each with `token`, except that a plain host has none.
+    fn show_gitlab_hosts(
+        &mut self,
+        hosts: BTreeMap<String, bool>,
+        saved: impl Fn(&str) -> bool,
+        token: impl Fn() -> Token,
+    ) {
+        self.gitlab.hosts = hosts
+            .into_iter()
+            .map(|(host, plain)| HostStatus {
+                saved: saved(&host),
+                token: if plain { Token::None } else { token() },
+                host,
+                plain,
+            })
+            .collect();
+    }
+
+    fn look_up_gitlab_host(
+        &self,
+        host: String,
+        saved: Option<SecretString>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        let task = cx.background_spawn({
+            let host = host.clone();
+            async move { check_host(&host, saved) }
+        });
+        cx.spawn(async move |this, cx| {
+            let token = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(status) = this.gitlab.hosts.iter_mut().find(|s| s.host == host) {
+                    status.token = token;
+                }
+                this.finish_gitlab_check(cx);
+                cx.notify();
+            });
+        })
+    }
+
+    /// Once every host is looked up, an empty host field starts at the first
+    /// host still needing a token, the source window's hosts first.
+    fn finish_gitlab_check(&mut self, cx: &mut Context<Self>) {
+        let hosts = &self.gitlab.hosts;
+        if hosts
+            .iter()
+            .any(|status| matches!(status.token, Token::Unknown))
+        {
+            return;
+        }
+        let Some(input) = &self.gitlab.host else {
+            return;
+        };
+        if !input.read(cx).text().is_empty() {
+            return;
+        }
+        let needs = |status: &&HostStatus| {
+            !status.plain
+                && !matches!(
+                    status.token,
+                    Token::Found {
+                        user: Some(Ok(_)),
+                        ..
+                    }
+                )
+        };
+        let preferred = &self.gitlab.preferred;
+        let Some(status) = hosts
+            .iter()
+            .filter(needs)
+            .find(|status| preferred.contains(&status.host))
+            .or_else(|| hosts.iter().find(needs))
+        else {
+            return;
+        };
+        let host = status.host.clone();
+        input.update(cx, |input, cx| input.set_text_selected(&host, cx));
     }
 
     /// Checks the pasted token with GitLab, then saves it for the host typed.
@@ -234,6 +352,19 @@ impl SettingsWindow {
             cx.notify();
             return;
         };
+        // A token sent to an HTTP address could be read on the way, and a
+        // host only read over HTTP would never send it.
+        let plain = typed.to_ascii_lowercase().starts_with("http://")
+            || self
+                .gitlab
+                .hosts
+                .iter()
+                .any(|status| status.plain && status.host == host);
+        if plain {
+            self.gitlab.message = Some(gitlab::Error::InsecureHost(host).to_string());
+            cx.notify();
+            return;
+        }
         let token = token_input.read(cx).text().trim().to_owned();
         if token.is_empty() {
             self.gitlab.message = Some("Paste a personal access token first.".to_owned());
@@ -245,9 +376,10 @@ impl SettingsWindow {
             cx.notify();
             return;
         };
-        token_input.update(cx, SearchInput::clear);
         let token = SecretString::from(token);
-        self.run_gitlab(cx, move || {
+        // The field keeps the token until it is saved: GitLab shows a token
+        // only once, so a failed check must not lose it.
+        self.run_gitlab(cx, true, move || {
             let user = account::whoami(&host, &token)?;
             saved::save(store, &host, Some(token))?;
             Ok(format!(
@@ -262,7 +394,7 @@ impl SettingsWindow {
             cx.notify();
             return;
         };
-        self.run_gitlab(cx, move || {
+        self.run_gitlab(cx, false, move || {
             saved::save(store, &host, None)?;
             Ok(format!("Forgot the token saved for {host}."))
         });
@@ -270,10 +402,11 @@ impl SettingsWindow {
 
     /// Runs a save or forget off the UI thread, then says how it went, looks
     /// every host up again, and has every window's Orchestrator read GitLab
-    /// again.
+    /// again. A successful save also empties the token field.
     fn run_gitlab(
         &mut self,
         cx: &mut Context<Self>,
+        saves_token: bool,
         work: impl FnOnce() -> Result<String, gitlab::Error> + Send + 'static,
     ) {
         self.gitlab.working = true;
@@ -283,6 +416,12 @@ impl SettingsWindow {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.gitlab.working = false;
+                if saves_token
+                    && result.is_ok()
+                    && let Some(input) = &this.gitlab.token
+                {
+                    input.update(cx, SearchInput::clear);
+                }
                 this.gitlab.message = Some(match result {
                     Ok(done) => done,
                     Err(error) => error.to_string(),
@@ -346,6 +485,12 @@ impl SettingsWindow {
             .flex_col()
             .min_w_0()
             .child(ui::section(theme, "Hosts", None))
+            .children(self.gitlab.problem.clone().map(|problem| {
+                div()
+                    .debug_selector(|| "gitlab-problem".into())
+                    .min_w_0()
+                    .child(self.control_note(problem))
+            }))
             .children(hosts)
             .child(
                 self.control_card("Add a token")

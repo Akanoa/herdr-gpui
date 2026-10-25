@@ -209,14 +209,78 @@ fn only_a_missing_or_refused_token_offers_the_sign_in() {
 }
 
 #[test]
+fn a_refused_gitlab_token_variable_asks_for_it_to_change() {
+    let refused = |source| gitlab::Error::Authentication.from_source(source);
+    let error = refused(Source::Environment);
+    assert!(matches!(error, gitlab::Error::EnvironmentRefused));
+    // A saved token cannot replace it, so the view offers no sign-in.
+    assert!(!error.needs_sign_in());
+    assert!(error.needs_user());
+    assert!(error.to_string().contains("GITLAB_TOKEN"));
+    for source in [Source::Saved, Source::Cli] {
+        assert!(matches!(refused(source), gitlab::Error::Authentication));
+    }
+    assert!(matches!(
+        gitlab::Error::Scope.from_source(Source::Environment),
+        gitlab::Error::Scope
+    ));
+}
+
+/// The private file's store, in `dir`.
+#[cfg(unix)]
+fn file_record(dir: &std::path::Path, record: &str) {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(dir.join("gitlab-credentials"))
+        .unwrap();
+    std::io::Write::write_all(&mut file, record.as_bytes()).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_malformed_saved_record_is_replaced_by_the_next_save_or_forget() {
+    use crate::gitlab::saved::{read_in, save_in};
+    use herdr_credentials::Store;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    file_record(path, "gitlab.com glpat-x\n");
+    assert!(matches!(
+        read_in(Store::File, path),
+        Err(gitlab::Error::Record)
+    ));
+
+    save_in(Store::File, path, "gitlab.com", Some(secret("glpat-new"))).unwrap();
+    let saved = read_in(Store::File, path).unwrap();
+    assert_eq!(
+        saved
+            .get("gitlab.com")
+            .map(|token| token.expose_secret().to_owned()),
+        Some("glpat-new".to_owned())
+    );
+
+    file_record(path, "not a record\n");
+    save_in(Store::File, path, "gitlab.com", None).unwrap();
+    assert_eq!(read_in(Store::File, path).unwrap().hosts().count(), 0);
+}
+
+#[test]
 fn no_credential_store_says_how_to_opt_in_for_gitlab() {
     let error = gitlab::Error::from(herdr_credentials::Error::Policy);
     assert!(matches!(error, gitlab::Error::NoStore(_)));
-    assert!(
-        error
-            .to_string()
-            .contains("[gitlab] allow_plaintext_credentials")
-    );
+    let text = error.to_string();
+    assert!(text.contains("[gitlab] allow_plaintext_credentials"));
+    // Linux's keyrings are named only where they exist.
+    assert!(!text.contains("GNOME"), "{text}");
+    #[cfg(target_os = "linux")]
+    {
+        let error = gitlab::Error::from(herdr_credentials::Error::SecretServiceUnavailable);
+        assert!(matches!(error, gitlab::Error::NoKeyring(_)));
+        assert!(error.to_string().contains("GNOME Keyring"));
+    }
     assert!(std::error::Error::source(&error).is_some());
     assert!(matches!(
         gitlab::Error::from(herdr_credentials::Error::Permissions),

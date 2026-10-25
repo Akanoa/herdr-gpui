@@ -83,6 +83,21 @@ pub(crate) fn open(source: WeakEntity<HerdrWindow>, cx: &mut App) {
     });
 }
 
+/// Opens Settings at `section`, as the status bar's phone or the
+/// Orchestrator's "sign in" does.
+fn open_at(source: WeakEntity<HerdrWindow>, section: Section, cx: &mut App) {
+    open(source, cx);
+    // Queued after `open`'s own deferred work, so the window exists by now.
+    cx.defer(move |cx| {
+        let Some(handle) = cx.default_global::<SettingsWindowHandle>().window else {
+            return;
+        };
+        let _ = handle.update(cx, |view, window, cx| {
+            view.select_section(section, window, cx);
+        });
+    });
+}
+
 fn open_with(
     source: WeakEntity<HerdrWindow>,
     cx: &mut App,

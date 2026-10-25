@@ -230,23 +230,36 @@ impl HerdrWindow {
             .map(|orchestrator| &orchestrator.view)
     }
 
-    /// The GitLab hosts the open views read, sorted, for Settings > GitLab.
-    pub(crate) fn orchestrator_gitlab_hosts(&self, cx: &App) -> Vec<String> {
-        let mut hosts: Vec<String> = self
-            .orchestrators
+    /// The GitLab hosts this window's views read, each with the scheme a
+    /// remote reads it over, for Settings > GitLab.
+    pub(crate) fn orchestrator_gitlab_hosts(
+        &self,
+        cx: &App,
+    ) -> Vec<(String, herdr_orchestrator::gitlab::Scheme)> {
+        self.orchestrators
             .values()
             .flat_map(|orchestrator| {
                 orchestrator
                     .view
                     .read(cx)
                     .gitlab_hosts()
-                    .map(str::to_owned)
+                    .map(|(host, scheme)| (host.to_owned(), scheme))
                     .collect::<Vec<_>>()
             })
-            .collect();
-        hosts.sort();
-        hosts.dedup();
-        hosts
+            .collect()
+    }
+
+    /// [`Self::orchestrator_gitlab_hosts`] over every main window, since a
+    /// saved token serves them all.
+    pub(crate) fn all_orchestrator_gitlab_hosts(
+        cx: &App,
+    ) -> Vec<(String, herdr_orchestrator::gitlab::Scheme)> {
+        cx.windows()
+            .into_iter()
+            .filter_map(|handle| handle.downcast::<HerdrWindow>())
+            .filter_map(|handle| handle.read(cx).ok())
+            .flat_map(|window| window.orchestrator_gitlab_hosts(cx))
+            .collect()
     }
 
     /// A saved sign-in changed, such as in Settings > GitLab: every view in

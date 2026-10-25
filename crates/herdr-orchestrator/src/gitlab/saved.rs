@@ -7,7 +7,10 @@
 use super::{Error, valid};
 use herdr_credentials::{Entry, Store};
 use secrecy::{ExposeSecret, SecretString};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 use zeroize::Zeroizing;
 
 /// The most hosts one record keeps, which also bounds its size.
@@ -115,17 +118,44 @@ fn directory() -> Result<PathBuf, Error> {
 
 /// Every saved token in `store`.
 pub fn read(store: Store) -> Result<Saved, Error> {
-    match herdr_credentials::read_entry(store, &ENTRY, &directory()?)? {
+    read_in(store, &directory()?)
+}
+
+/// [`read`] with the private file in `directory`.
+pub fn read_in(store: Store, directory: &Path) -> Result<Saved, Error> {
+    match herdr_credentials::read_entry(store, &ENTRY, directory)? {
         Some(record) => Saved::parse(&record),
         None => Ok(Saved::default()),
     }
 }
 
 /// Saves `token` for `host` in `store`, or forgets it with `None`, keeping
-/// the other hosts' tokens.
+/// the other hosts' tokens. A record not in the expected form is replaced:
+/// none of its tokens could be read, and keeping it would refuse every save
+/// and forget with no way out from the app. A store that cannot be read at
+/// all still fails, so a locked keyring never loses tokens.
 pub fn save(store: Store, host: &str, token: Option<SecretString>) -> Result<(), Error> {
-    let mut saved = read(store)?;
+    save_in(store, &directory()?, host, token)
+}
+
+/// [`save`] with the private file in `directory`.
+pub fn save_in(
+    store: Store,
+    directory: &Path,
+    host: &str,
+    token: Option<SecretString>,
+) -> Result<(), Error> {
+    let mut saved = match read_in(store, directory) {
+        Err(Error::Record) => {
+            tracing::warn!(
+                category = "orchestrator_gitlab",
+                "Replacing saved GitLab tokens not in the expected form"
+            );
+            Saved::default()
+        }
+        read => read?,
+    };
     saved.set(host, token)?;
     let record = (!saved.0.is_empty()).then(|| saved.record());
-    herdr_credentials::save_entry(store, &ENTRY, &directory()?, record.as_ref())
+    herdr_credentials::save_entry(store, &ENTRY, directory, record.as_ref())
 }

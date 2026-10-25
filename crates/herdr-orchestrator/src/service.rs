@@ -18,7 +18,6 @@ use chrono::{DateTime, Utc};
 use herdr_client::ConnectTarget;
 use herdr_github::Tokens;
 use herdr_remote::teleport::{AgentKind, Host};
-use secrecy::SecretString;
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
@@ -303,7 +302,7 @@ struct Worker {
     resume: HashMap<SourceKey, github::Resume>,
     /// The GitLab token, once looked up; Refresh looks again, so a new
     /// `glab auth login` is picked up without reopening the view.
-    gitlab_token: Option<Option<SecretString>>,
+    gitlab_token: Option<Option<gitlab::account::Found>>,
     cooldown: Option<Duration>,
 }
 
@@ -874,24 +873,22 @@ impl Worker {
                 let token = self
                     .gitlab_token
                     .get_or_insert_with(|| gitlab::token(&key.host, self.request.gitlab_store));
-                let scheme = self
-                    .snapshot
-                    .repo
-                    .as_ref()
-                    .and_then(|info| info.remote.as_ref())
-                    .filter(|remote| remote.source == *key)
-                    .map_or(gitlab::Scheme::Https, |remote| {
-                        gitlab::Scheme::of_remote(&remote.url)
-                    });
+                let scheme = gitlab::Scheme::of_source(self.snapshot.repo.as_ref(), key);
                 let previous = store.checkpoint(key)?;
                 let cancelled = &self.cancelled;
                 let listing = gitlab::sync(
                     (key, scheme),
-                    token.as_ref(),
+                    token.as_ref().map(|found| &found.token),
                     previous.as_ref(),
                     &|| cancelled.load(Ordering::Relaxed),
                     &mut self.cooldown,
-                )?;
+                )
+                .map_err(|error| match (error, token.as_ref()) {
+                    (Error::Gitlab(error), Some(found)) => {
+                        Error::Gitlab(error.from_source(found.source))
+                    }
+                    (error, _) => error,
+                })?;
                 let count = listing.items.len();
                 if !listing.complete || !writable {
                     self.uncached.insert(key.clone(), listing.items);

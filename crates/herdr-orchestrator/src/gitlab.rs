@@ -60,6 +60,10 @@ pub enum Error {
     InsecureRemote { repository: String },
     #[error("GitLab refused the token; replace it in Settings > GitLab")]
     Authentication,
+    #[error(
+        "GitLab refused GITLAB_TOKEN; change or unset it, since it is tried before a token saved in Settings > GitLab"
+    )]
+    EnvironmentRefused,
     #[error("GitLab refused the token's access; it needs the read_api scope")]
     Scope,
     #[error("GitLab refused access to {repository}; the token needs the read_api scope")]
@@ -72,14 +76,23 @@ pub enum Error {
     Status(u16),
     #[error("{0:?} is not a GitLab host name")]
     Host(String),
+    #[error(
+        "GitLab at {0} is read over plain HTTP, and a token is only ever sent over HTTPS: use an https:// remote"
+    )]
+    InsecureHost(String),
     #[error("GitLab tokens are saved for at most {} hosts", saved::MAX_HOSTS)]
     TooManyHosts,
     #[error("The saved GitLab tokens are not in the expected form")]
     Record,
     #[error("The folder for saved GitLab tokens could not be found: {0}")]
     Directory(#[source] herdr_client::local_path::PathError),
+    #[cfg(target_os = "linux")]
     #[error(
         "No desktop keyring is running to save a GitLab token in. Start GNOME Keyring, KWallet, or KeePassXC, set [gitlab] allow_plaintext_credentials = true, or use GITLAB_TOKEN"
+    )]
+    NoKeyring(#[source] herdr_credentials::Error),
+    #[error(
+        "No secure credential store is available to save a GitLab token in. Set [gitlab] allow_plaintext_credentials = true, or use GITLAB_TOKEN"
     )]
     NoStore(#[source] herdr_credentials::Error),
     #[error("The GitLab token could not be read or saved: {0}")]
@@ -90,7 +103,7 @@ impl From<herdr_credentials::Error> for Error {
     fn from(error: herdr_credentials::Error) -> Self {
         match error {
             #[cfg(target_os = "linux")]
-            herdr_credentials::Error::SecretServiceUnavailable => Self::NoStore(error),
+            herdr_credentials::Error::SecretServiceUnavailable => Self::NoKeyring(error),
             herdr_credentials::Error::Policy => Self::NoStore(error),
             error => Self::Store(error),
         }
@@ -121,6 +134,7 @@ impl Error {
             Self::SignIn { .. }
                 | Self::InsecureRemote { .. }
                 | Self::Authentication
+                | Self::EnvironmentRefused
                 | Self::Scope
                 | Self::Forbidden { .. }
                 | Self::NotFound { .. }
@@ -131,6 +145,16 @@ impl Error {
     /// GitLab fixes; the view offers that page rather than a failure.
     pub fn needs_sign_in(&self) -> bool {
         matches!(self, Self::SignIn { .. } | Self::Authentication)
+    }
+
+    /// The same failure for a token from `source`: a refused `GITLAB_TOKEN`
+    /// asks for that variable to change, since a token saved in Settings >
+    /// GitLab is only tried after it.
+    pub fn from_source(self, source: account::Source) -> Self {
+        match (self, source) {
+            (Self::Authentication, account::Source::Environment) => Self::EnvironmentRefused,
+            (error, _) => error,
+        }
     }
 }
 
@@ -157,6 +181,14 @@ impl Scheme {
             Ok(url) if url.scheme() == "http" => Self::Http,
             _ => Self::Https,
         }
+    }
+
+    /// How `source` is read: over its repository's remote's scheme when that
+    /// remote is the source's, else HTTPS.
+    pub fn of_source(info: Option<&super::repo::RepoInfo>, source: &SourceKey) -> Self {
+        info.and_then(|info| info.remote.as_ref())
+            .filter(|remote| remote.source == *source)
+            .map_or(Self::Https, |remote| Self::of_remote(&remote.url))
     }
 
     fn as_str(self) -> &'static str {
@@ -388,10 +420,11 @@ pub fn retry_after(
     Some(Duration::from_secs(wait.clamp(300, 86400)))
 }
 
-/// The token to read `host` as, in [`account::lookup`]'s order. Blocks on the
-/// credential store and a subprocess: call it from a worker.
-pub fn token(host: &str, store: herdr_credentials::Store) -> Option<SecretString> {
-    account::lookup(host, store).map(|found| found.token)
+/// The token to read `host` as and where it came from, in
+/// [`account::lookup`]'s order. Blocks on the credential store and a
+/// subprocess: call it from a worker.
+pub fn token(host: &str, store: herdr_credentials::Store) -> Option<account::Found> {
+    account::lookup(host, store)
 }
 
 /// The GitLab CLI's environment token, sent only to the host it names, so a

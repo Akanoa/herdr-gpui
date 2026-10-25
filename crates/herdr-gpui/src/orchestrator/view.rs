@@ -547,13 +547,22 @@ impl OrchestratorView {
         self.reload_conversation();
     }
 
-    /// The GitLab hosts this view's repositories are read from.
-    pub(crate) fn gitlab_hosts(&self) -> impl Iterator<Item = &str> {
-        self.repos
-            .iter()
-            .flat_map(|repo| &repo.snapshot.sources)
-            .filter(|status| status.key.provider == Provider::Gitlab)
-            .map(|status| status.key.host.as_str())
+    /// The GitLab hosts this view's repositories are read from, each with
+    /// the scheme its remote reads it over.
+    pub(crate) fn gitlab_hosts(
+        &self,
+    ) -> impl Iterator<Item = (&str, herdr_orchestrator::gitlab::Scheme)> {
+        self.repos.iter().flat_map(|repo| {
+            let info = repo.snapshot.repo.as_ref();
+            repo.snapshot
+                .sources
+                .iter()
+                .filter(|status| status.key.provider == Provider::Gitlab)
+                .map(move |status| {
+                    let scheme = herdr_orchestrator::gitlab::Scheme::of_source(info, &status.key);
+                    (status.key.host.as_str(), scheme)
+                })
+        })
     }
 
     /// A saved credential changed: sync again, as Refresh does.

@@ -50,6 +50,17 @@ pub fn lookup(host: &str, store: Store) -> Option<Found> {
     )
 }
 
+/// [`lookup`] with the host's saved token already read, so a caller listing
+/// many hosts reads the store once. Blocks on a subprocess.
+pub fn lookup_with(host: &str, saved: Option<SecretString>) -> Option<Found> {
+    resolve(
+        host,
+        |name| std::env::var_os(name),
+        || saved,
+        || cli_token(host),
+    )
+}
+
 /// [`lookup`]'s order over the given environment, saved token, and CLI;
 /// a later one is asked only when every earlier one has no token.
 pub fn resolve(
