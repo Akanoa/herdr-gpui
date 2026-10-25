@@ -90,6 +90,8 @@ pub struct Request {
     /// The accounts GitHub is read with; each source uses the one that
     /// reads its repository's owner.
     pub token: Option<Tokens>,
+    /// Where tokens pasted in Settings > GitLab are saved.
+    pub gitlab_store: herdr_credentials::Store,
     /// The folder holding the databases, and agent-launcher's to carry
     /// over, in place of the platform's; tests set it.
     pub data_root: Option<PathBuf>,
@@ -137,7 +139,7 @@ pub enum SyncState {
     Capped {
         count: usize,
     },
-    /// GitHub needs a signed-in account.
+    /// GitHub needs a signed-in account, or GitLab a token that works.
     SignIn,
     /// A provider or host this build cannot read yet, such as GitHub Enterprise.
     Unsupported,
@@ -728,7 +730,11 @@ impl Worker {
                         "Orchestrator source sync failed"
                     );
                     self.retry.push((key.clone(), Instant::now() + wait));
-                    SyncState::Failed(Arc::new(error))
+                    match &error {
+                        // Waits as a failure does, but offers the sign-in.
+                        Error::Gitlab(source) if source.needs_sign_in() => SyncState::SignIn,
+                        _ => SyncState::Failed(Arc::new(error)),
+                    }
                 }
             };
             self.set_state(&key, state);
@@ -867,7 +873,7 @@ impl Worker {
             Provider::Gitlab => {
                 let token = self
                     .gitlab_token
-                    .get_or_insert_with(|| gitlab::token(&key.host));
+                    .get_or_insert_with(|| gitlab::token(&key.host, self.request.gitlab_store));
                 let scheme = self
                     .snapshot
                     .repo

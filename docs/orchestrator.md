@@ -101,10 +101,26 @@ Its token is looked up once per view on the worker, and again on Refresh:
 1. `GITLAB_TOKEN`, then `GITLAB_ACCESS_TOKEN`, only for the host `GITLAB_HOST`
    names (gitlab.com when unset), so a gitlab.com token never reaches another
    host;
-2. else `glab config get token --host <host>`, the GitLab CLI's own sign-in,
+2. else the token Settings > GitLab saved for the host (`gitlab/saved.rs`);
+3. else `glab config get token --host <host>`, the GitLab CLI's own sign-in,
    with its environment tokens removed and the shared bounded process policy;
-3. else none: public projects still list, and a private one asks for a token.
+4. else none: public projects still list, and a private one asks for a token.
+
+A missing or refused token (`SignIn`, `Authentication`) shows the source as
+"sign in", as a signed-out GitHub does, and the chip opens Settings > GitLab;
+it still waits 30 minutes before the next try, which Refresh skips. Other
+refusals, such as a token without the `read_api` scope, stay failures.
+
+Settings > GitLab lists each GitLab host the open views read, and every host
+with a saved token, with where its token comes from and whom GitLab signs it
+in as (`/api/v4/user`, always over HTTPS; `gitlab/account.rs`). A pasted
+personal access token is checked that way before it is saved, and saving or
+forgetting one makes every view sync again. Saved tokens are one
+credential-store record of `host<TAB>token` lines, at most 16 hosts: the
+desktop keyring (`dev.herdr.gpui.gitlab`), or with `[gitlab]
+allow_plaintext_credentials = true` the private `0600` `gitlab-credentials`
+file beside the GUI config. A headless window never reads or writes them.
 
 Merge requests are not listed yet. They would need `PullRequest`-like
 metadata in the shared schema, which is a contract change for both
-applications, and herdr-gpui has no native GitLab sign-in.
+applications.

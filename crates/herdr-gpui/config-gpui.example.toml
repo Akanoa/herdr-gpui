@@ -535,6 +535,16 @@ size = 12
 # every other repository with the main sign-in. At most 8 accounts.
 # accounts = [{ id = "0123456789abcdef0123456789abcdef", owners = ["my-emu-org"] }]
 
+# GitLab tokens the Orchestrator reads issues with. Settings > GitLab checks a
+# pasted personal access token (scope read_api) and saves it per host in the
+# credential store; tokens are never read from this file. GITLAB_TOKEN takes
+# precedence for its host, and the GitLab CLI's sign-in serves a host without
+# a saved token.
+# [gitlab]
+# Same meaning as [github] allow_plaintext_credentials, for the saved tokens,
+# which are kept in their own 0600 gitlab-credentials file. Default is false.
+# allow_plaintext_credentials = false
+
 # A Coder deployment whose workspaces can be created and added as devices from
 # the device picker's "Add Coder Workspace…". Settings > Cloud devices edits
 # these keys and saves the client secret to the credential store, so editing

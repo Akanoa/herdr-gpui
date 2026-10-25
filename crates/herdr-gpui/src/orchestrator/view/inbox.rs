@@ -358,8 +358,14 @@ impl OrchestratorView {
                     .child(look.dot(color, 6.))
                     .child(div().text_color(rgb(theme.muted)).child(text))
                     .when(sign_in, |el| {
-                        el.cursor_pointer()
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::SignIn)))
+                        el.debug_selector(move || {
+                            format!(
+                                "orchestrator-sign-in-{}",
+                                provider_name(provider).to_lowercase()
+                            )
+                        })
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |_, _, _, cx| cx.emit(Event::SignIn(provider))))
                     })
             });
         // A repository without a GitHub remote has no GitHub source, which

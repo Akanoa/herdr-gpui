@@ -3,6 +3,7 @@
 mod configuration;
 mod fonts;
 mod general;
+pub(in crate::settings_window) mod gitlab;
 mod indicators;
 pub(in crate::settings_window) mod notifications;
 pub(in crate::settings_window) mod remote_control;

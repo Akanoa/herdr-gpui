@@ -4915,6 +4915,7 @@ dependencies = [
  "chrono",
  "gix",
  "herdr-client",
+ "herdr-credentials",
  "herdr-github",
  "herdr-remote",
  "rusqlite",

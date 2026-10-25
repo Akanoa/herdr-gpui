@@ -89,6 +89,12 @@ impl HerdrWindow {
         }
     }
 
+    /// Whether this window reads and writes saved sign-ins. Headless windows
+    /// never touch them, so tests leave the user's keyring alone.
+    pub(crate) fn reads_credentials(&self) -> bool {
+        self.avatars.is_some()
+    }
+
     /// Start signing in the account the GitHub page shows.
     pub(crate) fn start_github(&mut self) {
         let config = &self.config;

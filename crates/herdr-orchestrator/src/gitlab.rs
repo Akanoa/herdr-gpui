@@ -3,8 +3,12 @@
 //! `iid`. Every sync is a complete listing, so it may replace the cache.
 //!
 //! The token comes from `GITLAB_TOKEN` (or `GITLAB_ACCESS_TOKEN`) for the host
-//! `GITLAB_HOST` names, gitlab.com by default, else from the GitLab CLI's own
-//! sign-in for the remote's host. Without one, public projects still list.
+//! `GITLAB_HOST` names, gitlab.com by default, else from the one Settings >
+//! GitLab saved for the remote's host (`saved`), else from the GitLab CLI's
+//! own sign-in there (`account`). Without one, public projects still list.
+
+pub mod account;
+pub mod saved;
 
 use super::{Activity, Checkpoint, Item, ItemKey, SourceKey};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -48,16 +52,16 @@ pub enum Error {
     Address(String),
     #[error("The GitLab token is not one an HTTP header can carry")]
     Token,
-    #[error(
-        "GitLab shows {repository} only when signed in: set GITLAB_TOKEN or run glab auth login"
-    )]
+    #[error("GitLab shows {repository} only when signed in: add a token in Settings > GitLab")]
     SignIn { repository: String },
     #[error(
         "GitLab shows {repository} only when signed in, and a token is never sent over plain HTTP: use an https:// remote"
     )]
     InsecureRemote { repository: String },
-    #[error("GitLab refused the token; renew it with glab auth login or replace GITLAB_TOKEN")]
+    #[error("GitLab refused the token; replace it in Settings > GitLab")]
     Authentication,
+    #[error("GitLab refused the token's access; it needs the read_api scope")]
+    Scope,
     #[error("GitLab refused access to {repository}; the token needs the read_api scope")]
     Forbidden { repository: String },
     #[error("GitLab shows no project {repository} to this token")]
@@ -66,6 +70,47 @@ pub enum Error {
     RateLimit,
     #[error("GitLab request failed (HTTP {0})")]
     Status(u16),
+    #[error("{0:?} is not a GitLab host name")]
+    Host(String),
+    #[error("GitLab tokens are saved for at most {} hosts", saved::MAX_HOSTS)]
+    TooManyHosts,
+    #[error("The saved GitLab tokens are not in the expected form")]
+    Record,
+    #[error("The folder for saved GitLab tokens could not be found: {0}")]
+    Directory(#[source] herdr_client::local_path::PathError),
+    #[error(
+        "No desktop keyring is running to save a GitLab token in. Start GNOME Keyring, KWallet, or KeePassXC, set [gitlab] allow_plaintext_credentials = true, or use GITLAB_TOKEN"
+    )]
+    NoStore(#[source] herdr_credentials::Error),
+    #[error("The GitLab token could not be read or saved: {0}")]
+    Store(#[source] herdr_credentials::Error),
+}
+
+impl From<herdr_credentials::Error> for Error {
+    fn from(error: herdr_credentials::Error) -> Self {
+        match error {
+            #[cfg(target_os = "linux")]
+            herdr_credentials::Error::SecretServiceUnavailable => Self::NoStore(error),
+            herdr_credentials::Error::Policy => Self::NoStore(error),
+            error => Self::Store(error),
+        }
+    }
+}
+
+/// The `[gitlab]` table.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    /// Saves pasted tokens in the private `0600` `gitlab-credentials` file
+    /// when no desktop keyring is running. Same meaning as `[github]`'s.
+    pub allow_plaintext_credentials: bool,
+}
+
+impl Config {
+    /// Where pasted tokens are saved.
+    pub fn store(&self) -> herdr_credentials::Store {
+        herdr_credentials::Store::for_policy(self.allow_plaintext_credentials)
+    }
 }
 
 impl Error {
@@ -76,9 +121,16 @@ impl Error {
             Self::SignIn { .. }
                 | Self::InsecureRemote { .. }
                 | Self::Authentication
+                | Self::Scope
                 | Self::Forbidden { .. }
                 | Self::NotFound { .. }
         )
+    }
+
+    /// A missing or refused token, which a token pasted in Settings >
+    /// GitLab fixes; the view offers that page rather than a failure.
+    pub fn needs_sign_in(&self) -> bool {
+        matches!(self, Self::SignIn { .. } | Self::Authentication)
     }
 }
 
@@ -336,10 +388,10 @@ pub fn retry_after(
     Some(Duration::from_secs(wait.clamp(300, 86400)))
 }
 
-/// The token to read `host` as: the environment's, when it is meant for this
-/// host, else the GitLab CLI's. Blocks on a subprocess: call it from a worker.
-pub fn token(host: &str) -> Option<SecretString> {
-    environment_token(host, |name| std::env::var_os(name)).or_else(|| cli_token(host))
+/// The token to read `host` as, in [`account::lookup`]'s order. Blocks on the
+/// credential store and a subprocess: call it from a worker.
+pub fn token(host: &str, store: herdr_credentials::Store) -> Option<SecretString> {
+    account::lookup(host, store).map(|found| found.token)
 }
 
 /// The GitLab CLI's environment token, sent only to the host it names, so a

@@ -22,6 +22,7 @@ mod refresh;
 mod row_start;
 mod rows;
 mod sessions;
+mod sign_in;
 mod status;
 mod twin_text;
 mod twins;

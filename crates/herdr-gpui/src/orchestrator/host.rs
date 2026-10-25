@@ -190,6 +190,7 @@ impl HerdrWindow {
                         workspace_id: workspace.workspace_id.clone(),
                         token: token.clone(),
                         data_root: None,
+                        gitlab_store: self.config.gitlab.store(),
                         timing: Timing::default(),
                     },
                 });
@@ -221,6 +222,35 @@ impl HerdrWindow {
         self.orchestrators
             .get(&id)
             .map(|orchestrator| &orchestrator.view)
+    }
+
+    /// The GitLab hosts the open views read, sorted, for Settings > GitLab.
+    pub(crate) fn orchestrator_gitlab_hosts(&self, cx: &App) -> Vec<String> {
+        let mut hosts: Vec<String> = self
+            .orchestrators
+            .values()
+            .flat_map(|orchestrator| {
+                orchestrator
+                    .view
+                    .read(cx)
+                    .gitlab_hosts()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        hosts.sort();
+        hosts.dedup();
+        hosts
+    }
+
+    /// A saved sign-in changed elsewhere, such as in Settings > GitLab: every
+    /// view syncs again, so a new token shows without pressing Refresh.
+    pub(crate) fn refresh_orchestrators(&mut self, cx: &mut Context<Self>) {
+        for orchestrator in self.orchestrators.values() {
+            orchestrator
+                .view
+                .update(cx, |view, cx| view.credentials_changed(cx));
+        }
     }
 
     /// Every view, by id.
@@ -443,7 +473,10 @@ impl HerdrWindow {
                 }
                 Err(_) => self.tell_orchestrator(id, super::Error::NotWebAddress, cx),
             },
-            Event::SignIn => {
+            Event::SignIn(super::Provider::Gitlab) => {
+                crate::settings_window::open_gitlab(cx.entity().downgrade(), cx);
+            }
+            Event::SignIn(_) => {
                 if self.open_menu(window, cx) {
                     self.menu.page = Some(crate::menu::Page::GitHub);
                 }

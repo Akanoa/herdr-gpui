@@ -18,6 +18,7 @@ pub(super) enum Section {
     Plugins,
     #[cfg(feature = "cloud")]
     CloudDevices,
+    GitLab,
     RemoteControl,
     Configuration,
 }
@@ -67,6 +68,7 @@ impl Section {
         Self::Plugins,
         #[cfg(feature = "cloud")]
         Self::CloudDevices,
+        Self::GitLab,
         Self::RemoteControl,
         Self::Configuration,
     ];
@@ -86,6 +88,7 @@ impl Section {
             Self::Plugins => "Plugins",
             #[cfg(feature = "cloud")]
             Self::CloudDevices => "Cloud devices",
+            Self::GitLab => "GitLab",
             Self::RemoteControl => "Remote control",
             Self::Configuration => "Configuration",
         }
@@ -110,6 +113,7 @@ impl Section {
             Self::CloudDevices => {
                 Some("Create machines from your cloud accounts and use them as devices.")
             }
+            Self::GitLab => Some("The tokens the Orchestrator reads GitLab issues with."),
             Self::RemoteControl => Some(
                 "Use your chats from a phone, over HTTPS on your network or through Tailscale.",
             ),
@@ -132,7 +136,7 @@ impl Section {
             Self::Integrations | Self::Plugins => Some(Group::Connect),
             #[cfg(feature = "cloud")]
             Self::CloudDevices => Some(Group::Connect),
-            Self::RemoteControl => Some(Group::Connect),
+            Self::GitLab | Self::RemoteControl => Some(Group::Connect),
             Self::Configuration => Some(Group::Advanced),
         }
     }
@@ -152,6 +156,7 @@ impl Section {
             Self::Plugins => "icons/plug.svg",
             #[cfg(feature = "cloud")]
             Self::CloudDevices => "icons/globe.svg",
+            Self::GitLab => "icons/git-branch.svg",
             Self::RemoteControl => "icons/phone.svg",
             Self::Configuration => "icons/file.svg",
         }

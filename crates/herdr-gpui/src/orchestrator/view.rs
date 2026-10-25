@@ -66,8 +66,9 @@ pub(crate) enum Event {
     },
     /// Open a web address, such as an issue's page, in a browser tab.
     OpenUrl(String),
-    /// Sign in to GitHub, which the view needs to list a repository.
-    SignIn,
+    /// Sign in to the provider the view needs to list a repository: the
+    /// GitHub page, or Settings > GitLab.
+    SignIn(Provider),
     /// Start `request` on the host `endpoint`, which the window sets it up
     /// for, then hands back through [`OrchestratorView::dispatch_elsewhere`].
     Dispatch {
@@ -544,6 +545,21 @@ impl OrchestratorView {
         }
         self.reload_pull_request();
         self.reload_conversation();
+    }
+
+    /// The GitLab hosts this view's repositories are read from.
+    pub(crate) fn gitlab_hosts(&self) -> impl Iterator<Item = &str> {
+        self.repos
+            .iter()
+            .flat_map(|repo| &repo.snapshot.sources)
+            .filter(|status| status.key.provider == Provider::Gitlab)
+            .map(|status| status.key.host.as_str())
+    }
+
+    /// A saved credential changed: sync again, as Refresh does.
+    pub(crate) fn credentials_changed(&mut self, cx: &mut Context<Self>) {
+        self.refresh();
+        cx.notify();
     }
 
     /// Whether a sync is under way, or Refresh was pressed so recently that

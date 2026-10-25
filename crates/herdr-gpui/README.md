@@ -2338,9 +2338,13 @@ built-in prompt when none is chosen). GitHub is read as the account used
 for pull requests on that host. A GitLab remote, on gitlab.com or a
 self-managed host, lists its open issues (not yet its merge requests), read
 with `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN` when `GITLAB_HOST` names that host
-(gitlab.com by default), else with the GitLab CLI's sign-in (`glab auth
-login`), and sent only over HTTPS; public projects need neither, and an
-`http://` remote is read without one. GitHub Enterprise is listed as not
+(gitlab.com by default), else with a token saved in Settings > GitLab, else
+with the GitLab CLI's sign-in (`glab auth login`), and sent only over HTTPS;
+public projects need none, and an `http://` remote is read without one. When
+GitLab needs a token or refuses one, the source shows "sign in", which opens
+Settings > GitLab: it lists each host with where its token comes from and whom
+it signs in as, and checks a pasted personal access token (scope `read_api`)
+before saving it in the credential store. GitHub Enterprise is listed as not
 supported yet. The window button in the tab's header moves the view into
 a window of its own.
 
