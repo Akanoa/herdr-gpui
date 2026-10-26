@@ -67,8 +67,9 @@
             ];
           };
           cargoLock.lockFile = ./Cargo.lock;
-          # The app starts chats with the herdr-acp beside its executable, and
-          # runs the herdr-remote-control beside it as a user service.
+          # The app starts chats with the herdr-acp beside its executable,
+          # runs the herdr-remote-control beside it as a user service, and
+          # runs automations in the herdr-automate there.
           cargoBuildFlags = [
             "-p"
             "herdr-gpui"
@@ -76,6 +77,8 @@
             "herdr-acp"
             "-p"
             "herdr-remote-control"
+            "-p"
+            "herdr-automate"
           ];
           # The optimized CLI suite CI's main-branch build runs; the rest of
           # the workspace suite needs a desktop or a live daemon.
