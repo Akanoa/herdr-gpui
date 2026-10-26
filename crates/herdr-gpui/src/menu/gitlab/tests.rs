@@ -10,6 +10,8 @@ use gpui::{Entity, TestAppContext, VisualTestContext, px, size};
 use herdr_orchestrator::gitlab::{self, Scheme, account::Source, cli_hosts::CliHost};
 use std::{path::PathBuf, sync::Arc};
 
+mod saves;
+
 fn page(cx: &mut TestAppContext) -> (Entity<HerdrWindow>, &mut VisualTestContext) {
     let (view, cx) = cx.add_window_view(crate::sidebar::layout_tests::fixture_window);
     cx.simulate_resize(size(px(1200.), px(900.)));

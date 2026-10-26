@@ -246,9 +246,11 @@ impl HerdrWindow {
             .collect()
     }
 
-    /// [`Self::orchestrator_gitlab_hosts`] over every other main window,
-    /// since a saved token serves them all. A window being updated, such as
-    /// the caller's own, cannot be read and is left out.
+    /// [`Self::orchestrator_gitlab_hosts`] over every main window, since a
+    /// saved token serves them all. A window GPUI is updating, such as the
+    /// caller's own inside a window update, cannot be read and is left out.
+    /// Never call it from a plain update of a window's entity: reading that
+    /// window panics.
     pub(crate) fn all_orchestrator_gitlab_hosts(cx: &App) -> Vec<GitLabRead> {
         cx.windows()
             .into_iter()
@@ -266,21 +268,10 @@ impl HerdrWindow {
             .any(|orchestrator| orchestrator.view.read(cx).gitlab_needs_sign_in())
     }
 
-    /// [`Self::refresh_all_orchestrators`] from inside this window's own
-    /// update, which leaves this window out, so its views sync here first.
-    pub(crate) fn credentials_changed_everywhere(&mut self, cx: &mut Context<Self>) {
-        for orchestrator in self.orchestrators.values() {
-            orchestrator
-                .view
-                .update(cx, |view, cx| view.credentials_changed(cx));
-        }
-        Self::refresh_all_orchestrators(cx);
-    }
-
     /// A saved sign-in changed, such as a GitLab token pasted in the account
-    /// menu: every view in
-    /// every main window syncs again, so a new token shows without pressing
-    /// Refresh. Each window keeps its own views and workers.
+    /// menu: every view in every main window syncs again, so a new token
+    /// shows without pressing Refresh. Each window keeps its own views and
+    /// workers. Call it outside any window's update: it updates each one.
     pub(crate) fn refresh_all_orchestrators(cx: &mut App) {
         let windows: Vec<_> = cx
             .windows()

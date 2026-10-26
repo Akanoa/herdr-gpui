@@ -12,6 +12,7 @@ mod github;
 mod gitlab;
 mod gitlab_envrc;
 mod gitlab_hosts;
+mod gitlab_saved_turns;
 mod gitlab_sign_in;
 mod incremental;
 mod keys;

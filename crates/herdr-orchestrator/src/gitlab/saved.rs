@@ -10,6 +10,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::{Mutex, PoisonError},
 };
 use zeroize::Zeroizing;
 
@@ -17,6 +18,9 @@ use zeroize::Zeroizing;
 pub const MAX_HOSTS: usize = 16;
 /// A host name with an optional port, as a remote names it.
 const HOST_LIMIT: usize = 260;
+/// Held for a whole read, change, and write of the shared record, so two
+/// windows saving or forgetting at once cannot drop each other's change.
+static RECORD: Mutex<()> = Mutex::new(());
 
 const ENTRY: Entry<Error> = Entry {
     service: "dev.herdr.gpui.gitlab",
@@ -145,6 +149,8 @@ pub fn save_in(
     host: &str,
     token: Option<SecretString>,
 ) -> Result<(), Error> {
+    // Holds no data, so a panic elsewhere while it was held leaves nothing to repair.
+    let _turn = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
     let mut saved = match read_in(store, directory) {
         Err(Error::Record) => {
             tracing::warn!(

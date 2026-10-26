@@ -13,7 +13,7 @@ use herdr_orchestrator::gitlab::{
     cli_hosts::{self, CliHost},
     saved,
 };
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 mod render;
@@ -66,6 +66,9 @@ pub(crate) struct Listed {
 #[derive(Default)]
 pub(crate) struct GitLabMenu {
     pub(crate) hosts: Vec<HostStatus>,
+    /// The API each listed instance is read from, so a pasted token is
+    /// checked where its projects are read.
+    apis: BTreeMap<String, Api>,
     /// This window's instances, which the host field starts at first.
     preferred: Vec<String>,
     pub(super) host: Option<Entity<SearchInput>>,
@@ -246,14 +249,22 @@ impl HerdrWindow {
     /// Lists every main window's GitLab instances and those with a saved
     /// token, then looks each up on its own. Without a store the page still
     /// lists the instances, with no token.
+    /// Called inside a window update, which leaves this window out of the
+    /// others read.
     fn check_gitlab(&mut self, cx: &mut Context<Self>) {
+        let others = HerdrWindow::all_orchestrator_gitlab_hosts(cx);
+        self.check_gitlab_with(others, cx);
+    }
+
+    /// [`Self::check_gitlab`] with the other windows' instances already read.
+    /// This window's own may be among them: the merge lists each once.
+    fn check_gitlab_with(&mut self, others: Vec<GitLabRead>, cx: &mut Context<Self>) {
         let own = self.orchestrator_gitlab_hosts(cx);
         self.menu.gitlab.preferred = own
             .iter()
             .map(|read| saved::normalize_host(&read.host).unwrap_or_else(|| read.host.clone()))
             .collect();
-        // This window is being updated, so the others are read without it.
-        let mut listed = HerdrWindow::all_orchestrator_gitlab_hosts(cx);
+        let mut listed = others;
         listed.extend(own);
         self.menu.gitlab._lookups.clear();
         let Some(store) = self.gitlab_store() else {
@@ -301,6 +312,10 @@ impl HerdrWindow {
         saved: impl Fn(&str) -> bool,
         token: impl Fn() -> Token,
     ) {
+        self.menu.gitlab.apis = hosts
+            .iter()
+            .map(|(host, listed)| (host.clone(), listed.api.clone()))
+            .collect();
         self.menu.gitlab.hosts = hosts
             .iter()
             .map(|(host, listed)| {
@@ -421,11 +436,13 @@ impl HerdrWindow {
             return;
         };
         let token = SecretString::from(token);
+        // Checked where the listed instance is read from; an instance no
+        // remote reads goes where glab sends its API.
+        let listed = self.menu.gitlab.apis.get(&host).cloned();
         // The field keeps the token until it is saved: GitLab shows a token
         // only once, so a failed check must not lose it.
-        self.run_gitlab(cx, true, move || {
-            // glab may serve the instance's API elsewhere, or only over HTTP.
-            let api = Api::of_instance(&host, &cli_hosts::read());
+        self.run_gitlab(cx, Some(token.clone()), move || {
+            let api = listed.unwrap_or_else(|| Api::of_instance(&host, &cli_hosts::read()));
             let user = account::whoami(&api, &token)?;
             saved::save(store, &host, Some(token))?;
             Ok(format!(
@@ -440,7 +457,7 @@ impl HerdrWindow {
             cx.notify();
             return;
         };
-        self.run_gitlab(cx, false, move || {
+        self.run_gitlab(cx, None, move || {
             saved::save(store, &host, None)?;
             Ok(format!("Forgot the token saved for {host}."))
         });
@@ -448,11 +465,12 @@ impl HerdrWindow {
 
     /// Runs a save or forget off the UI thread, then says how it went, looks
     /// every instance up again, and has every window's Orchestrator read
-    /// GitLab again. A successful save also empties the token field.
+    /// GitLab again. A successful save also empties the token field, unless
+    /// another token was typed there meanwhile.
     fn run_gitlab(
         &mut self,
         cx: &mut Context<Self>,
-        saves_token: bool,
+        saved_token: Option<SecretString>,
         work: impl FnOnce() -> Result<String, gitlab::Error> + Send + 'static,
     ) {
         self.menu.gitlab.working = true;
@@ -460,11 +478,15 @@ impl HerdrWindow {
         let task = cx.background_spawn(async move { work() });
         self.menu.gitlab._save = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
+            // Read before updating this window: inside its update, reading
+            // the windows would reach it and panic.
+            let listed = cx.update(|cx| HerdrWindow::all_orchestrator_gitlab_hosts(cx));
             let _ = this.update(cx, |this, cx| {
                 this.menu.gitlab.working = false;
-                if saves_token
-                    && result.is_ok()
+                if result.is_ok()
+                    && let Some(saved) = &saved_token
                     && let Some(input) = &this.menu.gitlab.token
+                    && input.read(cx).text().trim() == saved.expose_secret()
                 {
                     input.update(cx, SearchInput::clear);
                 }
@@ -472,10 +494,12 @@ impl HerdrWindow {
                     Ok(done) => done,
                     Err(error) => error.to_string(),
                 });
-                this.credentials_changed_everywhere(cx);
-                this.check_gitlab(cx);
+                this.check_gitlab_with(listed, cx);
                 cx.notify();
             });
+            // After this window's update, which a window update cannot enter,
+            // so every window, this one included, reads GitLab again.
+            cx.update(HerdrWindow::refresh_all_orchestrators);
         }));
         cx.notify();
     }
