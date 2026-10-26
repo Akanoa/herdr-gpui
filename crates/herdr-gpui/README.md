@@ -13,8 +13,17 @@ daemons, spawn a local PTY, or emulate a terminal. Herdr's remote bridge may sta
 the named remote session. SSH requires an installed POSIX Herdr, noninteractive authentication,
 and an already trusted host key. For hosts that need MFA or a password, configure
 `ControlMaster auto` with a `ControlPath` in `~/.ssh/config` and authenticate once
-with `ssh HOST` in a terminal: the app reuses that master connection while it lives,
-but never creates or keeps one itself. Set `ForwardAgent yes` only for trusted hosts;
+with `ssh HOST` in a terminal: the app reuses that master connection while it lives.
+Otherwise, on macOS and Linux, the app's own short commands on a host (Git reads,
+avatars, usage, scripts) share one SSH login per host instead of a login each, so
+hosts that rate-limit new SSH connections (a firewall `limit` rule, sshd's
+`MaxStartups`) are not flooded; large transfers such as Teleport get a second
+login of their own, and terminals keep their own connection. These shared logins
+are the app's private children: their sockets are in a directory only the app
+can open, they never touch a master of yours, and they end with the app, even
+if it crashes. One that cannot log in leaves that host's commands connecting
+directly as before, trying again at most once a minute, then less often.
+Set `ForwardAgent yes` only for trusted hosts;
 Herdr servers that support it then keep remote panes' `SSH_AUTH_SOCK` working
 across reconnects. A failed host is retried with backoff capped at 30 seconds.
 Runtime dependencies include GPUI, `herdr-client`, `serde_json` for API parameters,
@@ -119,10 +128,9 @@ include desktop integration and notices; updater-only
 `herdr-gpui-VERSION-TARGET-update.tar.gz` archives contain one executable.
 Native two-version update/restart QA remains pending.
 
-The macOS **QA** menu requires the opt-in `qa-menu` Cargo feature and is excluded
-from default Cargo builds and published releases. `just run` enables it
-automatically, or use
-`cargo run --locked --release -p herdr-gpui --features qa-menu`.
+The **QA** menu is off by default in every build, including published
+releases; turn on **Settings > General > QA menu** (`qa_menu = true` under `[features]`) to show it. The menu bar
+gains or loses it as soon as the setting changes.
 The menu offers **Show NeedsAttention toast**, **Show Finished
 toast**, **Show UpdateInstalled toast**, and **Show Custom toast**. Each adds a
 synthetic in-app toast for the selected endpoint, even when disconnected. Each
@@ -1412,7 +1420,7 @@ effects from inactive endpoints. A burst rings at most once per 500 ms. On
 platforms where GPUI does not implement attention requests or the system bell,
 those settings do nothing.
 
-**QA > Ring Bell in 3 Seconds** (QA builds) previews both reactions after a
+**QA > Ring Bell in 3 Seconds** previews both reactions after a
 delay, so there is time to switch to another app and watch the Dock: it plays the
 system alert and, if the window is then inactive, requests attention. It
 bypasses `[bell]` and the rate limit, and needs no daemon.
@@ -3967,8 +3975,14 @@ Ctrl+Shift+U is left unbound for
   a workspace. Cmd-N opens the New worktree dialog for the focused workspace
   (for a linked worktree, through its repository's main checkout, starting from
   the linked worktree's branch). The dialog opens on
-  its Branch field with the proposal selected, so typing replaces it; Tab
-  back to the form returns there. The Name field is optional: left empty,
+  its Branch field with the proposal selected, so typing replaces it. Tab and
+  Shift-Tab move between the search, Name, and Branch fields, selecting the
+  field's text, and Ctrl-Tab and Ctrl-Shift-Tab step through the dialog's
+  tabs; in a listing, Tab moves through its rows. The Branch field formats
+  what is typed, pasted, or committed by an input method: whitespace and
+  characters Git refuses (`~^:?*[\`) become one dash, and sequences Git
+  refuses, such as `..`, `@{`, `//`, or a leading dash, never form, so the
+  branch stays one Git accepts. The Name field is optional: left empty,
   the daemon picks the workspace name; anything
   typed is sent as the new workspace's label. The proposed branch follows the
   name, so "Fix login" proposes `worktree/fix-login`, until the Branch field
@@ -4836,7 +4850,7 @@ verified in Ubuntu 24.04, not native desktop rendering or input. Linux uses
 [Ctrl+Shift application shortcuts](#keyboard-shortcuts); explicitly configured
 `cmd` bindings still mean Super. Linux shows an **in-window menu
 bar** using the same Herdr, File, Edit, View, Terminal, and Window definitions as
-macOS (plus QA in `qa-menu` builds). It remains visible with the sidebar hidden
+macOS (plus QA when `features.qa_menu` is on). It remains visible with the sidebar hidden
 and collapses to **Menu** in narrow windows. In client-decorated windows, the
 minimize, maximize, and close buttons share its right edge. Drag the empty
 menu-bar background to move the window; it also supports the title bar's
