@@ -92,3 +92,34 @@ fn a_renewed_pair_the_store_refuses_is_used_and_saved_later() {
     .unwrap();
     assert_eq!(kept(path, "gitlab.com").as_deref(), Some("new"));
 }
+
+/// A pair the store refused is renewed again when due. Another window's
+/// lookup may save that refused pair while GitLab answers; the newly
+/// granted pair still replaces it, since the store would otherwise keep a
+/// refresh token GitLab already spent.
+#[test]
+fn a_refused_pair_saved_during_its_own_renewal_is_still_replaced() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    connect(path, "gitlab.com", "old");
+    let lock = |mode| fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    lock(0o500);
+    token_in(Store::File, path, "gitlab.com", 1_000, |_, now| {
+        Ok(oauth("new", "refresh-2", now + 7_200))
+    })
+    .unwrap();
+    assert_eq!(kept(path, "gitlab.com").as_deref(), Some("old"));
+    // Due again, with the store still refusing the pending pair.
+    let token = token_in(Store::File, path, "gitlab.com", 9_000, |renewing, now| {
+        assert_eq!(renewing.refresh.expose_secret(), "refresh-2");
+        lock(0o700);
+        // What another window's lookup writes while GitLab answers.
+        let pending = Kept::OAuth(oauth("new", "refresh-2", 8_200));
+        save_kept_in(Store::File, path, "gitlab.com", Some(pending)).unwrap();
+        Ok(oauth("newest", "refresh-3", now + 7_200))
+    })
+    .unwrap();
+    assert_eq!(token.unwrap().expose_secret(), "newest");
+    assert_eq!(kept(path, "gitlab.com").as_deref(), Some("newest"));
+}

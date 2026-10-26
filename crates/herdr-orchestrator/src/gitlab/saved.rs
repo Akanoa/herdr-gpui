@@ -54,9 +54,21 @@ struct Unsaved {
     store: Store,
     directory: PathBuf,
     host: String,
-    /// The refresh token the store holds, which GitLab spent on `renewed`.
-    spent: SecretString,
+    /// The refresh tokens `renewed` replaces: the one the store held, and
+    /// the one GitLab spent on `renewed` when that differs, as it does when
+    /// a pair the store refused is renewed again. Another lookup may save
+    /// that refused pair meanwhile; it is still the same sign-in.
+    spent: Vec<SecretString>,
     renewed: OAuth,
+}
+
+impl Unsaved {
+    /// Whether `kept` is a pair `renewed` replaces.
+    fn replaces(&self, kept: &OAuth) -> bool {
+        self.spent
+            .iter()
+            .any(|spent| spent.expose_secret() == kept.refresh.expose_secret())
+    }
 }
 
 /// An account connected with OAuth.
@@ -338,10 +350,11 @@ pub fn token_in(
 /// What the store holds for an instance, read under [`RECORD`].
 enum Current {
     Ready(Option<SecretString>),
-    /// An OAuth sign-in to renew: `oauth`, renewed from the store's pair,
-    /// whose refresh token is `spent` once `oauth` is renewed.
+    /// An OAuth sign-in to renew: `oauth`, the store's pair or a renewal of
+    /// it the store refused. `spent` holds the refresh tokens the renewal
+    /// replaces, as [`Unsaved::spent`] does.
     Due {
-        spent: SecretString,
+        spent: Vec<SecretString>,
         oauth: OAuth,
     },
 }
@@ -355,10 +368,11 @@ fn current(store: Store, directory: &Path, host: &str, now: u64) -> Result<Curre
     };
     let oauth = unsaved(store, directory, host, kept).unwrap_or_else(|| kept.clone());
     Ok(if oauth.due(now) {
-        Current::Due {
-            spent: kept.refresh.clone(),
-            oauth,
+        let mut spent = vec![kept.refresh.clone()];
+        if oauth.refresh.expose_secret() != kept.refresh.expose_secret() {
+            spent.push(oauth.refresh.clone());
         }
+        Current::Due { spent, oauth }
     } else {
         Current::Ready(Some(oauth.access))
     })
@@ -373,7 +387,7 @@ fn unsaved(store: Store, directory: &Path, host: &str, kept: &OAuth) -> Option<O
     })?;
     let entry = unsaved.swap_remove(index);
     // The sign-in changed since, as a Disconnect or a new Connect does.
-    if entry.spent.expose_secret() != kept.refresh.expose_secret() {
+    if !entry.replaces(kept) {
         return None;
     }
     let renewed = entry.renewed.clone();
@@ -396,18 +410,15 @@ fn keep_renewed(entry: Unsaved) {
         store,
         directory,
         host,
-        spent,
         renewed,
+        ..
     } = &entry;
     let _record = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
     let saved = match read_in(*store, directory) {
         Ok(saved) => saved,
         Err(error) => return keep_unsaved(entry, &error),
     };
-    if !matches!(
-        saved.kept(host),
-        Some(Kept::OAuth(kept)) if kept.refresh.expose_secret() == spent.expose_secret()
-    ) {
+    if !matches!(saved.kept(host), Some(Kept::OAuth(kept)) if entry.replaces(kept)) {
         return;
     }
     if let Err(error) = write_in(*store, directory, host, Some(Kept::OAuth(renewed.clone()))) {

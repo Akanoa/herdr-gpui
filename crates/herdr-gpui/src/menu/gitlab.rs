@@ -24,6 +24,7 @@ use std::{
 };
 
 mod connect;
+mod keys;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -111,6 +112,8 @@ pub(crate) struct GitLabMenu {
     pub(crate) form: bool,
     /// Each signed-in account's picture.
     avatars: crate::avatars::ProfileAvatars,
+    /// The control the keyboard selected, which Enter or Space uses.
+    pub(crate) selected: Option<keys::Action>,
 }
 
 impl GitLabMenu {
@@ -121,6 +124,19 @@ impl GitLabMenu {
         self._task = None;
         self._lookups.clear();
         self.checking.clear();
+    }
+
+    /// The instance the welcome page offers to connect: one this window
+    /// reads first, then any other that can connect, else the first listed.
+    pub(crate) fn welcome_lead(&self) -> usize {
+        let connectable = |(_, status): &(usize, &HostStatus)| status.can_connect;
+        let mut hosts = self.hosts.iter().enumerate();
+        hosts
+            .clone()
+            .filter(connectable)
+            .find(|(_, status)| self.preferred.contains(&status.host))
+            .or_else(|| hosts.find(connectable))
+            .map_or(0, |(index, _)| index)
     }
 }
 
@@ -281,6 +297,7 @@ impl HerdrWindow {
             });
         }
         self.menu.gitlab.form = false;
+        self.menu.gitlab.selected = None;
         window.focus(&self.menu.focus, cx);
         self.menu.gitlab.message = None;
         self.check_gitlab(cx);
@@ -640,48 +657,5 @@ impl HerdrWindow {
         }
         let listed = cx.update(|cx| HerdrWindow::all_orchestrator_gitlab_hosts(cx));
         let _ = this.update(cx, |this, cx| this.check_gitlab_hosts(listed, cx));
-    }
-
-    /// Keys while the GitLab page shows. The fields edit themselves; Enter
-    /// saves the token, Tab moves between the fields, and Escape closes the
-    /// token form, then the menu.
-    pub(super) fn gitlab_key(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let key = event.keystroke.key.as_str();
-        let fields = [&self.menu.gitlab.host, &self.menu.gitlab.token];
-        let focused = fields
-            .iter()
-            .flat_map(|field| field.as_ref())
-            .find(|input| input.read(cx).focus.is_focused(window));
-        if let Some(input) = focused
-            && (input.read(cx).is_composing() || !matches!(key, "escape" | "enter" | "tab"))
-        {
-            return;
-        }
-        cx.stop_propagation();
-        window.prevent_default();
-        match key {
-            "escape" if self.menu.gitlab.form => self.hide_gitlab_form(window, cx),
-            "escape" => self.dismiss_menu(window, cx),
-            "enter" if self.menu.gitlab.form && !self.menu.gitlab.working => self.save_gitlab(cx),
-            "tab" if self.menu.gitlab.form => {
-                let next = match focused {
-                    Some(input) if Some(input) == self.menu.gitlab.host.as_ref() => {
-                        &self.menu.gitlab.token
-                    }
-                    _ => &self.menu.gitlab.host,
-                };
-                if let Some(input) = next {
-                    let focus = input.read(cx).focus.clone();
-                    window.focus(&focus, cx);
-                }
-            }
-            _ => {}
-        }
-        cx.notify();
     }
 }

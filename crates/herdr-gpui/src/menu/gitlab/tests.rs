@@ -14,8 +14,10 @@ use herdr_orchestrator::gitlab::{
 };
 use std::{path::PathBuf, sync::Arc};
 
+mod keyboard;
 mod recheck;
 mod saves;
+mod welcome;
 
 fn page(cx: &mut TestAppContext) -> (Entity<HerdrWindow>, &mut VisualTestContext) {
     let (view, cx) = cx.add_window_view(crate::sidebar::layout_tests::fixture_window);

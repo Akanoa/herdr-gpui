@@ -1,7 +1,7 @@
 //! Drawing the account menu's header, shared by its GitHub and GitLab pages,
 //! and the GitLab page itself.
 
-use super::{HostStatus, Token, connect::Connecting, status_line};
+use super::{HostStatus, Token, connect::Connecting, keys::Action, status_line};
 use crate::{HerdrWindow, fonts::StyledFont, menu::Page, search_input::SearchInput};
 use gpui::{prelude::*, *};
 use herdr_orchestrator::gitlab::account::Source;
@@ -75,6 +75,10 @@ impl HerdrWindow {
                         .debug_selector(|| "github-mark".into()),
                     page == Page::GitHub,
                 )
+                .when(
+                    page == Page::GitLab && self.menu.gitlab.is_selected(&Action::GitHub),
+                    |tab| tab.bg(rgb(theme.active)),
+                )
                 .on_click(cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();
                     this.menu.page = Some(Page::GitHub);
@@ -107,9 +111,11 @@ impl HerdrWindow {
                     .py(px(4.))
                     .rounded(px(crate::config::corners::CONTROL))
                     .when(
-                        page == Page::GitHub
+                        (page == Page::GitHub
                             && self.menu.github_selected
-                                == Some(crate::menu::github::Action::Close),
+                                == Some(crate::menu::github::Action::Close))
+                            || (page == Page::GitLab
+                                && self.menu.gitlab.is_selected(&Action::Close)),
                         |style| style.bg(rgb(theme.active)),
                     )
                     .hover(|style| style.bg(rgb(theme.active)))
@@ -155,6 +161,11 @@ impl HerdrWindow {
             .child(crate::sidebar::label_text(&label))
     }
 
+    /// How the control the keyboard selected shows, on a filled button too.
+    fn selected_look(&self, button: Stateful<Div>) -> Stateful<Div> {
+        button.border_color(rgb(self.theme.foreground))
+    }
+
     /// An instance's card: the account's picture and name, the instance with
     /// where its token comes from, and what can be done about it.
     fn render_gitlab_host(&self, index: usize, status: &HostStatus, cx: &mut Context<Self>) -> Div {
@@ -195,7 +206,7 @@ impl HerdrWindow {
             .connecting
             .as_ref()
             .filter(|connecting| connecting.host == status.host);
-        let actions = self.render_gitlab_actions(index, status, user.is_some(), cx);
+        let actions = self.render_gitlab_actions(index, status, cx);
         div()
             .debug_selector(move || format!("gitlab-host-{index}"))
             .flex()
@@ -285,54 +296,27 @@ impl HerdrWindow {
         &self,
         index: usize,
         status: &HostStatus,
-        signed_in: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let gitlab = &self.menu.gitlab;
         let checking = gitlab.checking.contains(&status.host);
         let ready = !gitlab.working && gitlab.connecting.is_none() && !checking;
         let host = status.host.clone();
-        // A token from an .envrc or the shell is tried before a connected
-        // account, so connecting would change nothing.
-        let shadowed = matches!(
-            status.token,
-            Token::Found {
-                source: Source::Envrc | Source::Environment,
-                ..
-            }
-        );
-        let refused = matches!(
-            status.token,
-            Token::Found {
-                source: Source::Saved,
-                user: Some(Err(_)),
-            }
-        );
-        let label = if status.connected {
-            "Connect again"
-        } else {
-            "Connect"
-        };
-        let connect =
-            (status.can_connect && (!status.connected || refused) && !signed_in && !shadowed).then(
-                || {
-                    self.gitlab_connect_button(
-                        format!("gitlab-connect-{index}"),
-                        label,
-                        &host,
-                        checking,
-                        cx,
-                    )
-                },
-            );
-        let remove = status.saved.then(|| {
-            let label = if status.connected {
-                "Disconnect"
-            } else {
-                "Forget"
-            };
+        let (connect, remove) = super::keys::card_buttons(status);
+        let connect = connect.map(|label| {
+            self.gitlab_connect_button(
+                format!("gitlab-connect-{index}"),
+                label,
+                &host,
+                checking,
+                cx,
+            )
+        });
+        let remove = remove.map(|label| {
+            let selected = gitlab.is_selected(&Action::Remove(host.clone()));
             let host = host.clone();
             self.gitlab_button(format!("gitlab-forget-{index}"), label, false, ready)
+                .when(selected, |button| self.selected_look(button))
                 .when(ready, |button| {
                     button.on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -380,7 +364,9 @@ impl HerdrWindow {
         let gitlab = &self.menu.gitlab;
         let ready = !gitlab.working && gitlab.connecting.is_none() && !checking;
         let host = host.to_owned();
+        let selected = gitlab.is_selected(&Action::Connect(host.clone()));
         self.gitlab_button(id, label, true, ready)
+            .when(selected, |button| self.selected_look(button))
             .when(ready, |button| {
                 button.on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
@@ -394,11 +380,7 @@ impl HerdrWindow {
     fn render_gitlab_welcome(&self, cx: &mut Context<Self>) -> Div {
         let theme = &self.theme;
         let gitlab = &self.menu.gitlab;
-        let lead = gitlab
-            .hosts
-            .iter()
-            .position(|status| status.can_connect)
-            .unwrap_or(0);
+        let lead = gitlab.welcome_lead();
         let status = gitlab.hosts.get(lead);
         let host = status.map_or("gitlab.com", |status| status.host.as_str());
         let read_by = status
@@ -499,6 +481,9 @@ impl HerdrWindow {
             .cursor_pointer()
             .text_color(accent)
             .hover(|style| style.underline())
+            .when(self.menu.gitlab.is_selected(&Action::Paste), |link| {
+                link.underline()
+            })
             .child(label)
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
@@ -547,6 +532,9 @@ impl HerdrWindow {
                     .gap(px(8.))
                     .child(
                         self.gitlab_button("gitlab-open", "Open GitLab", true, true)
+                            .when(self.menu.gitlab.is_selected(&Action::Open), |button| {
+                                self.selected_look(button)
+                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.open_gitlab_approval(cx);
@@ -563,6 +551,9 @@ impl HerdrWindow {
                             false,
                             true,
                         )
+                        .when(self.menu.gitlab.is_selected(&Action::Copy), |button| {
+                            self.selected_look(button)
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
                             this.copy_gitlab_code(cx);
@@ -570,6 +561,9 @@ impl HerdrWindow {
                     )
                     .child(
                         self.gitlab_button("gitlab-cancel", "Cancel", false, true)
+                            .when(self.menu.gitlab.is_selected(&Action::Cancel), |button| {
+                                self.selected_look(button)
+                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.cancel_gitlab_connect(cx);
@@ -588,12 +582,7 @@ impl HerdrWindow {
         let gitlab = &self.menu.gitlab;
         let ready = !gitlab.working;
         // Nothing has a token, and some instance could take one.
-        let welcome = !gitlab.form
-            && gitlab.hosts.iter().any(|status| !status.plain)
-            && gitlab
-                .hosts
-                .iter()
-                .all(|status| matches!(status.token, Token::None));
+        let welcome = gitlab.shows_welcome();
         let field =
             |label: &'static str, selector: &'static str, input: &Option<Entity<SearchInput>>| {
                 div()
@@ -699,6 +688,9 @@ impl HerdrWindow {
             Some(
                 footer.child(
                     self.gitlab_button("gitlab-add", "+ Add instance", false, true)
+                        .when(gitlab.is_selected(&Action::Add), |button| {
+                            self.selected_look(button)
+                        })
                         .on_click(cx.listener(|this, _, window, cx| {
                             cx.stop_propagation();
                             this.show_gitlab_form(true, window, cx);
