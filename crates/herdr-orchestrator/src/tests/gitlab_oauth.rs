@@ -1,5 +1,5 @@
 //! Connecting a GitLab account with OAuth: GitLab's device and token replies,
-//! the record line that keeps the pair, renewal under the record lock, and
+//! the record line that keeps the pair, renewal only when due, and
 //! which application connects which instance.
 use crate::gitlab::{
     self,

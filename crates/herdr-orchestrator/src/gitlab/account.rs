@@ -2,12 +2,13 @@
 //! GitLab takes it for: what the title bar's account menu shows for each.
 
 use super::{
-    Api, Error, Scheme, TIMEOUT, authorization, cli_token, environment_token, envrc, saved,
+    Api, Error, Scheme, TIMEOUT, agent, authorization, body, cli_token, environment_token, envrc,
+    saved,
 };
 use herdr_credentials::Store;
 use secrecy::SecretString;
 use serde::Deserialize;
-use std::{ffi::OsString, io::Read, path::Path};
+use std::{ffi::OsString, path::Path};
 
 /// The answer to `/user` is a small object; anything larger is refused.
 const LIMIT: u64 = 64 * 1024;
@@ -38,9 +39,15 @@ pub struct Found {
 /// saved in `store`, then the GitLab CLI's. `checkout` is a folder on this
 /// computer, or `None` for a remote one, whose `.envrc` is not run here. A
 /// store that cannot be read is skipped, so the CLI's sign-in still serves.
-/// Blocks on direnv, the store, and the CLI: call it from a worker.
-pub fn lookup(host: &str, store: Store, checkout: Option<&Path>) -> Option<Found> {
-    lookup_with(host, || kept(store, host), checkout)
+/// Blocks on direnv, which `cancelled` stops, the store, and the CLI: call
+/// it from a worker.
+pub fn lookup(
+    host: &str,
+    store: Store,
+    checkout: Option<&Path>,
+    cancelled: &impl Fn() -> bool,
+) -> Option<Found> {
+    lookup_with(host, || kept(store, host), checkout, cancelled)
 }
 
 /// The token kept for `host` in `store`, an OAuth one renewed first when
@@ -58,15 +65,16 @@ pub fn kept(store: Store, host: &str) -> Option<SecretString> {
 
 /// [`lookup`] with the kept token from `saved`, asked only when no earlier
 /// source has one, so a caller listing many instances can read the store
-/// once. Blocks on direnv and the CLI.
+/// once. Blocks on direnv, which `cancelled` stops, and the CLI.
 pub fn lookup_with(
     host: &str,
     saved: impl FnOnce() -> Option<SecretString>,
     checkout: Option<&Path>,
+    cancelled: &impl Fn() -> bool,
 ) -> Option<Found> {
     resolve(
         host,
-        || checkout.and_then(|checkout| envrc::token(checkout, host)),
+        || checkout.and_then(|checkout| envrc::token(checkout, host, cancelled)),
         herdr_client::login_env::var,
         saved,
         || cli_token(host),
@@ -110,13 +118,7 @@ pub fn whoami(api: &Api, token: &SecretString) -> Result<User, Error> {
     let origin = format!("https://{}", api.host);
     let url = url::Url::parse(&format!("{origin}/api/v4/user"))
         .map_err(|_| Error::Address(api.host.clone()))?;
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
-        .max_redirects(0)
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let mut reply = agent
+    let mut reply = agent(TIMEOUT)
         .get(url.as_str())
         .header("User-Agent", "Herdr-GPUI")
         .header("Accept", "application/json")
@@ -133,15 +135,5 @@ pub fn whoami(api: &Api, token: &SecretString) -> Result<User, Error> {
         429 => return Err(Error::RateLimit),
         status => return Err(Error::Status(status)),
     }
-    let mut bytes = Vec::new();
-    reply
-        .body_mut()
-        .as_reader()
-        .take(LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(Error::Read)?;
-    if bytes.len() as u64 > LIMIT {
-        return Err(Error::Size);
-    }
-    serde_json::from_slice(&bytes).map_err(Error::Json)
+    serde_json::from_slice(&body(&mut reply, LIMIT)?).map_err(Error::Json)
 }

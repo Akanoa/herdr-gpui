@@ -30,6 +30,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod gitlab_source;
 mod sources;
 
 pub use sources::sources;
@@ -306,8 +307,8 @@ struct Worker {
     /// Where each GitHub source's next incremental sync continues.
     resume: HashMap<SourceKey, github::Resume>,
     /// The GitLab token, once looked up, and the instance it is for; Refresh
-    /// looks again, so a new `glab auth login` is picked up without
-    /// reopening the view.
+    /// and a refusal look again, so a new `glab auth login` or a renewed
+    /// connected account is picked up without reopening the view.
     gitlab_token: Option<(String, Option<gitlab::account::Found>)>,
     cooldown: Option<Duration>,
 }
@@ -868,38 +869,11 @@ impl Worker {
                 })
             }
             Provider::Gitlab => {
-                let scheme = gitlab::Scheme::of_source(self.snapshot.repo.as_ref(), key);
-                let api = gitlab::Api::resolve(&key.host, scheme);
-                if self
-                    .gitlab_token
-                    .as_ref()
-                    .is_none_or(|(instance, _)| *instance != api.instance)
-                {
-                    // A remote checkout's .envrc is that machine's, not run here.
-                    let checkout = (!self.request.target.is_remote())
-                        .then(|| std::path::Path::new(&self.request.checkout));
-                    let token = gitlab::token(&api.instance, self.request.gitlab_store, checkout);
-                    self.gitlab_token = Some((api.instance.clone(), token));
-                }
-                let token = self
-                    .gitlab_token
-                    .as_ref()
-                    .and_then(|(_, token)| token.as_ref());
                 let previous = store.checkpoint(key)?;
-                let cancelled = &self.cancelled;
-                let listing = gitlab::sync(
-                    (key, &api),
-                    token.map(|found| &found.token),
-                    previous.as_ref(),
-                    &|| cancelled.load(Ordering::Relaxed),
-                    &mut self.cooldown,
-                )
-                .map_err(|error| match (error, token) {
-                    (Error::Gitlab(error), Some(found)) => {
-                        Error::Gitlab(error.from_source(found.source))
-                    }
-                    (error, _) => error,
-                })?;
+                let listing = self.gitlab_listing(key, previous.as_ref())?;
+                let Some(store) = self.store.as_mut() else {
+                    return Ok(SyncState::Unsupported);
+                };
                 let count = listing.items.len();
                 if !listing.complete || !writable {
                     self.uncached.insert(key.clone(), listing.items);

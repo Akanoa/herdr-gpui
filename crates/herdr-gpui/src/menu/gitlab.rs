@@ -14,7 +14,14 @@ use herdr_orchestrator::gitlab::{
     saved::{self, Kept, Saved},
 };
 use secrecy::{ExposeSecret, SecretString};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 mod connect;
 mod render;
@@ -72,6 +79,12 @@ pub(crate) struct Listed {
 #[derive(Default)]
 pub(crate) struct GitLabMenu {
     pub(crate) hosts: Vec<HostStatus>,
+    /// Instances showing their last lookup while a new one runs, so a card
+    /// and its picture hold still; their buttons wait for it.
+    pub(crate) checking: BTreeSet<String>,
+    /// Set to stop the lookups under way, when the next check replaces them
+    /// or the menu closes, so a slow `.envrc` is not loaded for nothing.
+    stop: Arc<AtomicBool>,
     /// The API each listed instance is read from, so a pasted token is
     /// checked where its projects are read.
     apis: BTreeMap<String, Api>,
@@ -98,6 +111,17 @@ pub(crate) struct GitLabMenu {
     pub(crate) form: bool,
     /// Each signed-in account's picture.
     avatars: crate::avatars::ProfileAvatars,
+}
+
+impl GitLabMenu {
+    /// Stops the lookups under way; their rows keep what they show.
+    pub(crate) fn stop_lookups(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.stop = Arc::default();
+        self._task = None;
+        self._lookups.clear();
+        self.checking.clear();
+    }
 }
 
 /// Where a token came from, as the page says it.
@@ -204,11 +228,16 @@ pub(crate) fn merge_hosts(
     hosts
 }
 
-/// An instance's token and whom it signs in as. Blocks on direnv, `glab`,
-/// and the network: run it off the UI thread.
-fn check_host(listed: &Listed, saved: impl FnOnce() -> Option<SecretString>) -> Token {
+/// An instance's token and whom it signs in as. Blocks on direnv, which
+/// `stop` stops, `glab`, and the network: run it off the UI thread.
+fn check_host(
+    listed: &Listed,
+    saved: impl FnOnce() -> Option<SecretString>,
+    stop: &AtomicBool,
+) -> Token {
     let api = &listed.api;
-    match account::lookup_with(&api.instance, saved, listed.checkout.as_deref()) {
+    let stopped = || stop.load(Ordering::Relaxed);
+    match account::lookup_with(&api.instance, saved, listed.checkout.as_deref(), &stopped) {
         Some(found) => Token::Found {
             user: Some(
                 account::whoami(api, &found.token)
@@ -327,7 +356,7 @@ impl HerdrWindow {
             .iter()
             .map(|read| saved::normalize_host(&read.host).unwrap_or_else(|| read.host.clone()))
             .collect();
-        self.menu.gitlab._lookups.clear();
+        self.menu.gitlab.stop_lookups();
         let Some(store) = self.gitlab_store() else {
             self.menu.gitlab._task = None;
             self.menu.gitlab.problem = None;
@@ -377,22 +406,36 @@ impl HerdrWindow {
             .map(|(host, listed)| (host.clone(), listed.api.clone()))
             .collect();
         let config = &self.config.gitlab;
+        let mut last: BTreeMap<String, Token> = std::mem::take(&mut self.menu.gitlab.hosts)
+            .into_iter()
+            .filter(|status| !matches!(status.token, Token::Unknown))
+            .map(|status| (status.host, status.token))
+            .collect();
+        let mut checking = BTreeSet::new();
         self.menu.gitlab.hosts = hosts
             .iter()
             .map(|(host, listed)| {
                 let plain = listed.api.scheme == Scheme::Http;
                 let kept = saved.and_then(|saved| saved.kept(host));
+                let mut token = if plain { Token::None } else { token() };
+                if matches!(token, Token::Unknown)
+                    && let Some(found) = last.remove(host)
+                {
+                    checking.insert(host.clone());
+                    token = found;
+                }
                 HostStatus {
                     saved: kept.is_some(),
                     connected: matches!(kept, Some(Kept::OAuth(_))),
                     can_connect: !plain && config.application(host).is_some(),
                     checkout: listed.checkout.as_deref().and_then(folder_name),
-                    token: if plain { Token::None } else { token() },
+                    token,
                     host: host.clone(),
                     plain,
                 }
             })
             .collect();
+        self.menu.gitlab.checking = checking;
     }
 
     /// Looks one instance up off the UI thread. A connected account's token
@@ -405,16 +448,26 @@ impl HerdrWindow {
         cx: &mut Context<Self>,
     ) -> Task<()> {
         let host = listed.api.instance.clone();
+        let stop = Arc::clone(&self.menu.gitlab.stop);
         let task = cx.background_spawn(async move {
-            check_host(&listed, || match kept {
-                Some(Kept::OAuth(_)) => account::kept(store, &listed.api.instance),
-                Some(kept) => Some(kept.token().clone()),
-                None => None,
-            })
+            let token = check_host(
+                &listed,
+                || match kept {
+                    Some(Kept::OAuth(_)) => account::kept(store, &listed.api.instance),
+                    Some(kept) => Some(kept.token().clone()),
+                    None => None,
+                },
+                &stop,
+            );
+            // A stopped lookup skipped the .envrc, so its answer may be wrong.
+            (!stop.load(Ordering::Relaxed)).then_some(token)
         });
         cx.spawn(async move |this, cx| {
-            let token = task.await;
+            let Some(token) = task.await else {
+                return;
+            };
             let _ = this.update(cx, |this, cx| {
+                this.menu.gitlab.checking.remove(&host);
                 if let Some(status) = this
                     .menu
                     .gitlab
@@ -434,10 +487,11 @@ impl HerdrWindow {
     /// first instance still needing a token, this window's first.
     fn finish_gitlab_check(&mut self, cx: &mut Context<Self>) {
         let gitlab = &self.menu.gitlab;
-        if gitlab
-            .hosts
-            .iter()
-            .any(|status| matches!(status.token, Token::Unknown))
+        if !gitlab.checking.is_empty()
+            || gitlab
+                .hosts
+                .iter()
+                .any(|status| matches!(status.token, Token::Unknown))
         {
             return;
         }

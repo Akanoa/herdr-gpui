@@ -4,29 +4,109 @@
 
 use super::{CLI_TIMEOUT, TOKEN_VARIABLES, environment_token};
 use secrecy::{ExposeSecret, SecretString};
-use std::{collections::HashMap, ffi::OsString, path::Path, time::Instant};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    sync::{Mutex, PoisonError},
+    time::{Duration, Instant, SystemTime},
+};
 
 /// The whole environment `env` prints; the rest of a large one is dropped.
 const OUTPUT_LIMIT: usize = 256 * 1024;
+/// How long what an `.envrc` loads is reused while the file is unchanged.
+/// Loading one may evaluate a Nix shell, too slow to repeat on every lookup.
+const REUSE: Duration = Duration::from_secs(5 * 60);
+/// The most checkouts whose variables are kept.
+const CHECKOUTS: usize = 32;
 
-/// Whether direnv has a file to load for `checkout`: an `.envrc` there or in
-/// a folder above it.
-fn has_envrc(checkout: &Path) -> bool {
+/// The GitLab variables each checkout's `.envrc` loaded, newest last.
+static LOADED: Mutex<Vec<Loaded>> = Mutex::new(Vec::new());
+
+struct Loaded {
+    checkout: PathBuf,
+    /// Each `.envrc` direnv would load, and when it last changed.
+    files: Vec<(PathBuf, Option<SystemTime>)>,
+    at: Instant,
+    variables: Vec<(String, SecretString)>,
+}
+
+/// Every `.envrc` direnv may load for `checkout`, in it or a folder above
+/// it, with when each last changed; empty when there is none.
+fn envrc_files(checkout: &Path) -> Vec<(PathBuf, Option<SystemTime>)> {
     checkout
         .ancestors()
-        .any(|folder| folder.join(".envrc").is_file())
+        .map(|folder| folder.join(".envrc"))
+        .filter(|file| file.is_file())
+        .map(|file| {
+            let modified = file.metadata().and_then(|meta| meta.modified()).ok();
+            (file, modified)
+        })
+        .collect()
 }
 
 /// The token `checkout`'s `.envrc` sets for instance `host`, if direnv is
-/// installed and the file is allowed. Blocks on a subprocess: call it from
-/// a worker.
-pub fn token(checkout: &Path, host: &str) -> Option<SecretString> {
-    if !has_envrc(checkout) {
+/// installed and the file is allowed. Blocks on a subprocess, which
+/// `cancelled` stops: call it from a worker.
+pub fn token(checkout: &Path, host: &str, cancelled: &impl Fn() -> bool) -> Option<SecretString> {
+    let files = envrc_files(checkout);
+    if files.is_empty() {
         return None;
     }
+    let variables = match reused(checkout, &files) {
+        Some(variables) => variables,
+        None => {
+            let variables = load(checkout, cancelled)?;
+            keep(checkout, files, &variables);
+            variables
+        }
+    };
+    token_in(&variables, host)
+}
+
+/// What `checkout`'s `.envrc` loaded, while every file is unchanged.
+fn reused(
+    checkout: &Path,
+    files: &[(PathBuf, Option<SystemTime>)],
+) -> Option<Vec<(String, SecretString)>> {
+    let loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    loaded
+        .iter()
+        .find(|loaded| {
+            loaded.checkout == checkout && loaded.files == files && loaded.at.elapsed() < REUSE
+        })
+        .map(|loaded| loaded.variables.clone())
+}
+
+fn keep(
+    checkout: &Path,
+    files: Vec<(PathBuf, Option<SystemTime>)>,
+    variables: &[(String, SecretString)],
+) {
+    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    loaded.retain(|loaded| loaded.checkout != checkout);
+    if loaded.len() >= CHECKOUTS {
+        loaded.remove(0);
+    }
+    loaded.push(Loaded {
+        checkout: checkout.to_owned(),
+        files,
+        at: Instant::now(),
+        variables: variables.to_vec(),
+    });
+}
+
+/// The GitLab variables direnv loads in `checkout`, or `None` when it
+/// cannot: not installed, the file not allowed, or `cancelled`.
+fn load(checkout: &Path, cancelled: &impl Fn() -> bool) -> Option<Vec<(String, SecretString)>> {
     let mut command = herdr_client::new_command("direnv");
     // An app opened from a desktop launcher has a minimal PATH.
     herdr_client::login_env::apply(&mut command);
+    // Only a token the .envrc sets counts as the checkout's, not one this
+    // process or the login shell already had. GITLAB_HOST stays, so a token
+    // the .envrc sets applies where glab in that folder would send it.
+    for name in TOKEN_VARIABLES {
+        command.env_remove(name);
+    }
     command
         .env("DIRENV_LOG_FORMAT", "")
         .arg("exec")
@@ -35,11 +115,11 @@ pub fn token(checkout: &Path, host: &str) -> Option<SecretString> {
     let result = herdr_github::pull_request::run_bytes(
         &mut command,
         Instant::now() + CLI_TIMEOUT,
-        &|| false,
+        cancelled,
         OUTPUT_LIMIT,
     );
     match result {
-        Ok((true, output)) => from_env(&output, host, herdr_client::login_env::var),
+        Ok((true, output)) => Some(variables(&output)),
         Ok((false, _)) => None,
         Err(error) => {
             tracing::debug!(
@@ -52,21 +132,27 @@ pub fn token(checkout: &Path, host: &str) -> Option<SecretString> {
     }
 }
 
-/// The token in `env`'s output for `host`, unless the login shell (`shell`)
-/// has the same one: that one is the environment's, not the checkout's.
-pub fn from_env(
-    output: &[u8],
-    host: &str,
-    shell: impl Fn(&str) -> Option<OsString>,
-) -> Option<SecretString> {
+/// The GitLab variables in `env`'s output: `GITLAB_HOST` and the tokens.
+fn variables(output: &[u8]) -> Vec<(String, SecretString)> {
     let text = String::from_utf8_lossy(output);
-    let set: HashMap<&str, &str> = text
-        .lines()
+    text.lines()
         .filter_map(|line| line.split_once('='))
         .filter(|(name, _)| *name == "GITLAB_HOST" || TOKEN_VARIABLES.contains(name))
-        .collect();
-    let token = environment_token(host, |name| set.get(name).map(OsString::from))?;
-    let own = environment_token(host, shell);
-    own.is_none_or(|own| own.expose_secret() != token.expose_secret())
-        .then_some(token)
+        .map(|(name, value)| (name.to_owned(), SecretString::from(value)))
+        .collect()
+}
+
+fn token_in(variables: &[(String, SecretString)], host: &str) -> Option<SecretString> {
+    environment_token(host, |name| {
+        variables
+            .iter()
+            .find(|(variable, _)| variable == name)
+            .map(|(_, value)| OsString::from(value.expose_secret()))
+    })
+}
+
+/// The token for `host` in the output of `env` run where the `.envrc` was
+/// loaded, which carries no token but the ones it sets.
+pub fn from_env(output: &[u8], host: &str) -> Option<SecretString> {
+    token_in(&variables(output), host)
 }

@@ -5,10 +5,10 @@
 //! is sent; it has no secret to keep. Every call blocks on the network:
 //! run it from a worker.
 
-use super::{Error, TIMEOUT, saved::OAuth, valid};
+use super::{Error, TIMEOUT, agent, body, saved::OAuth, valid};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use std::{io::Read, time::Duration};
+use std::time::Duration;
 
 /// Herdr UI's OAuth application on gitlab.com. Public by design: a device
 /// flow application has no secret.
@@ -198,14 +198,8 @@ fn post(instance: &str, path: &str, fields: &[(&str, &str)]) -> Result<(u16, Vec
     let origin = format!("https://{instance}");
     let url = url::Url::parse(&format!("{origin}/oauth/{path}"))
         .map_err(|_| Error::Address(instance.to_owned()))?;
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT.min(Duration::from_secs(15))))
-        .max_redirects(0)
-        .http_status_as_error(false)
-        .build()
-        .into();
     // ureq owns the form's buffers; never log the fields or the reply.
-    let mut reply = agent
+    let mut reply = agent(TIMEOUT.min(Duration::from_secs(15)))
         .post(url.as_str())
         .header("User-Agent", "Herdr-GPUI")
         .header("Accept", "application/json")
@@ -215,15 +209,5 @@ fn post(instance: &str, path: &str, fields: &[(&str, &str)]) -> Result<(u16, Vec
             source: Box::new(error),
         })?;
     let status = reply.status().as_u16();
-    let mut bytes = Vec::new();
-    reply
-        .body_mut()
-        .as_reader()
-        .take(LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(Error::Read)?;
-    if bytes.len() as u64 > LIMIT {
-        return Err(Error::Size);
-    }
-    Ok((status, bytes))
+    Ok((status, body(&mut reply, LIMIT)?))
 }

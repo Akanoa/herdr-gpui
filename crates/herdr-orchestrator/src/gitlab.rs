@@ -354,12 +354,7 @@ pub fn sync(
     cancelled: &impl Fn() -> bool,
     cooldown: &mut Option<Duration>,
 ) -> super::Result<Listing> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
-        .max_redirects(0)
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent = agent(TIMEOUT);
     let credential = Credential::new(api.scheme, token);
     let mut fetch = |after| {
         if cancelled() {
@@ -485,17 +480,34 @@ fn fetch_page(
         );
         return Err(status_error(status, &source.repository, credential));
     }
+    serde_json::from_slice(&body(&mut reply, LIMIT)?).map_err(Error::Json)
+}
+
+/// An agent for GitLab's API: bounded by `timeout`, following no redirect,
+/// so a token is never carried to another address, and returning refusals
+/// as statuses to read.
+fn agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .build()
+        .into()
+}
+
+/// A reply's body, refused when it is larger than `limit`.
+fn body(reply: &mut ureq::http::Response<ureq::Body>, limit: u64) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     reply
         .body_mut()
         .as_reader()
-        .take(LIMIT + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(Error::Read)?;
-    if bytes.len() as u64 > LIMIT {
+    if bytes.len() as u64 > limit {
         return Err(Error::Size);
     }
-    serde_json::from_slice(&bytes).map_err(Error::Json)
+    Ok(bytes)
 }
 
 fn authorization(token: &SecretString) -> Result<ureq::http::HeaderValue, Error> {
@@ -547,14 +559,15 @@ pub fn retry_after(
 }
 
 /// The token to read instance `host` as and where it came from, in
-/// [`account::lookup`]'s order. Blocks on the credential store and a
-/// subprocess: call it from a worker.
+/// [`account::lookup`]'s order. Blocks on the credential store and
+/// subprocesses, which `cancelled` stops: call it from a worker.
 pub fn token(
     host: &str,
     store: herdr_credentials::Store,
     checkout: Option<&std::path::Path>,
+    cancelled: &impl Fn() -> bool,
 ) -> Option<account::Found> {
-    account::lookup(host, store, checkout)
+    account::lookup(host, store, checkout, cancelled)
 }
 
 /// The GitLab CLI's environment token, sent only to the host it names, so a

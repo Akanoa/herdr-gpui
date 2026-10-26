@@ -113,14 +113,17 @@ the read is anonymous, and a project that is not public asks for an
 may replace the cache; a larger project is shown and not written, as GitHub's
 is.
 
-Its token is looked up once per view on the worker, and again on Refresh or
-when the remote's instance changes:
+Its token is looked up once per view on the worker, and again on Refresh,
+when the remote's instance changes, or when GitLab refuses it (once, before
+asking to sign in, so a connected account renewed since is picked up):
 
 1. the `GITLAB_TOKEN`, then `GITLAB_ACCESS_TOKEN`, that the checkout's
    `.envrc` sets (`gitlab/envrc.rs`): `direnv exec <checkout> env`, only for a
    checkout on this computer with an `.envrc` there or above it. direnv loads
-   only a file the user allowed, so nothing runs that their shell would not. A
-   value equal to the login shell's own is left to the next step;
+   only a file the user allowed, so nothing runs that their shell would not.
+   direnv runs without the app's own token variables, so only a token the
+   `.envrc` sets counts. What it loads is reused for five minutes while every
+   `.envrc` is unchanged, and closing the view stops a load under way;
 2. else `GITLAB_TOKEN`, then `GITLAB_ACCESS_TOKEN`, from the login shell (or
    the app's own environment), only for the instance `GITLAB_HOST` names
    (gitlab.com when unset), so a gitlab.com token never reaches another host.
@@ -151,7 +154,9 @@ signs it in as (`/api/v4/user`, always over HTTPS; `gitlab/account.rs`), with
 the account's picture when it is gitlab.com's or Gravatar's (a self-managed
 instance's is not fetched, and its card shows the GitLab mark). The saved
 record is read once and each instance is checked on its own, so a slow one
-never holds the others' cards. While no instance has a token, the tab shows a
+never holds the others' cards. A card checked again keeps what it showed,
+picture included, until the new answer lands, and closing the menu stops the
+checks. While no instance has a token, the tab shows a
 single **Connect** button for the instance this window reads instead. An
 instance every remote reads over plain `http://` takes no token, so its card
 says so and the page refuses to save one for it. The token form is folded
@@ -169,10 +174,15 @@ gets Connect once `[gitlab] applications` names one for it. The approval page
 must be an HTTPS page on the instance, or nothing opens. The granted pair is
 checked with `/api/v4/user`, then kept like a pasted token. GitLab's access
 tokens last two hours and its refresh tokens are single-use, so whoever reads
-a connected account's token (`saved::token`) renews it under one lock when it
-is within 10 minutes of expiring and keeps the new pair before using it; a
-renewal that fails keeps the old token, which GitLab refuses once it expires,
-so the view asks to connect again. **Disconnect** removes the pair. Closing
+a connected account's token (`saved::token`) renews it, one renewal per
+instance at a time, when it is within 10 minutes of expiring, and keeps the
+new pair before using it. The saved record is not locked while GitLab answers,
+so other instances, saves, and forgets never wait on it, and a pair renewed
+after a Disconnect or a new Connect is dropped. A renewed pair the store
+refuses is still used, and kept in memory and saved again by the next lookup,
+since GitLab has spent the stored one. A renewal that fails keeps the old
+token, which GitLab refuses once it expires, so the view asks to connect again
+and the card offers **Connect again**. **Disconnect** removes the pair. Closing
 the menu stops a connection waiting for approval. A saved record not in the expected form is
 reported on the page and replaced by the next save or forget; a store that
 cannot be read at all is never overwritten. Saved tokens are one

@@ -278,8 +278,9 @@ impl HerdrWindow {
     }
 
     /// A card's buttons: Connect where an application can sign in and no
-    /// account is, Disconnect or Forget for what is saved here, else the
-    /// checkout whose `.envrc` gives the token.
+    /// account is, or Connect again where GitLab refused the connected one,
+    /// Disconnect or Forget for what is saved here, else the checkout whose
+    /// `.envrc` gives the token.
     fn render_gitlab_actions(
         &self,
         index: usize,
@@ -288,7 +289,8 @@ impl HerdrWindow {
         cx: &mut Context<Self>,
     ) -> Div {
         let gitlab = &self.menu.gitlab;
-        let ready = !gitlab.working && gitlab.connecting.is_none();
+        let checking = gitlab.checking.contains(&status.host);
+        let ready = !gitlab.working && gitlab.connecting.is_none() && !checking;
         let host = status.host.clone();
         // A token from an .envrc or the shell is tried before a connected
         // account, so connecting would change nothing.
@@ -299,10 +301,30 @@ impl HerdrWindow {
                 ..
             }
         );
+        let refused = matches!(
+            status.token,
+            Token::Found {
+                source: Source::Saved,
+                user: Some(Err(_)),
+            }
+        );
+        let label = if status.connected {
+            "Connect again"
+        } else {
+            "Connect"
+        };
         let connect =
-            (status.can_connect && !status.connected && !signed_in && !shadowed).then(|| {
-                self.gitlab_connect_button(format!("gitlab-connect-{index}"), "Connect", &host, cx)
-            });
+            (status.can_connect && (!status.connected || refused) && !signed_in && !shadowed).then(
+                || {
+                    self.gitlab_connect_button(
+                        format!("gitlab-connect-{index}"),
+                        label,
+                        &host,
+                        checking,
+                        cx,
+                    )
+                },
+            );
         let remove = status.saved.then(|| {
             let label = if status.connected {
                 "Disconnect"
@@ -352,10 +374,11 @@ impl HerdrWindow {
         id: String,
         label: impl Into<SharedString>,
         host: &str,
+        checking: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let gitlab = &self.menu.gitlab;
-        let ready = !gitlab.working && gitlab.connecting.is_none();
+        let ready = !gitlab.working && gitlab.connecting.is_none() && !checking;
         let host = host.to_owned();
         self.gitlab_button(id, label, true, ready)
             .when(ready, |button| {
@@ -394,6 +417,7 @@ impl HerdrWindow {
                 format!("gitlab-connect-{lead}"),
                 format!("Connect {host}"),
                 host,
+                false,
                 cx,
             )
         });

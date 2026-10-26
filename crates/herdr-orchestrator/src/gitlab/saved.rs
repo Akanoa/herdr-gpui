@@ -11,7 +11,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError},
     time::{SystemTime, UNIX_EPOCH},
 };
 use zeroize::Zeroizing;
@@ -35,10 +35,29 @@ const ENTRY: Entry<Error> = Entry {
     validate: |record| Saved::parse(record).map(drop),
 };
 
-/// Every read-modify-write of the record, and every OAuth renewal: GitLab's
-/// refresh tokens are single-use, so two workers renewing at once would
-/// leave one holding a refresh token GitLab already spent.
+/// Every read-modify-write of the record. Never held across a request to
+/// GitLab, so a slow renewal holds up no other instance, save, or forget.
 static RECORD: Mutex<()> = Mutex::new(());
+
+/// Each instance's renewal, by lowercase instance: GitLab's refresh tokens
+/// are single-use, so two workers renewing one instance at once would leave
+/// one holding a refresh token GitLab already spent. Taken before [`RECORD`].
+static RENEWALS: Mutex<BTreeMap<String, Arc<Mutex<()>>>> = Mutex::new(BTreeMap::new());
+
+/// Renewed pairs the store refused to keep. GitLab spent the pair the store
+/// still holds, so until one of these is written the next lookup uses it
+/// and writes it again. Taken after [`RECORD`].
+static UNSAVED: Mutex<Vec<Unsaved>> = Mutex::new(Vec::new());
+
+/// A renewed pair not yet kept, and the record it belongs to.
+struct Unsaved {
+    store: Store,
+    directory: PathBuf,
+    host: String,
+    /// The refresh token the store holds, which GitLab spent on `renewed`.
+    spent: SecretString,
+    renewed: OAuth,
+}
 
 /// An account connected with OAuth.
 #[derive(Clone)]
@@ -272,25 +291,37 @@ pub fn token_in(
     now: u64,
     renew: impl FnOnce(&OAuth, u64) -> Result<OAuth, Error>,
 ) -> Result<Option<SecretString>, Error> {
-    let _record = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
-    // Read under the lock: another worker may have renewed it already.
-    let saved = read_in(store, directory)?;
-    let oauth = match saved.kept(host) {
-        None => return Ok(None),
-        Some(Kept::Token(token)) => return Ok(Some(token.clone())),
-        Some(Kept::OAuth(oauth)) if !oauth.due(now) => return Ok(Some(oauth.access.clone())),
-        Some(Kept::OAuth(oauth)) => oauth,
+    let host = host.to_ascii_lowercase();
+    if let Current::Ready(token) = current(store, directory, &host, now)? {
+        return Ok(token);
+    }
+    let renewal = Arc::clone(
+        RENEWALS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(host.clone())
+            .or_default(),
+    );
+    let _renewal = renewal.lock().unwrap_or_else(PoisonError::into_inner);
+    // Look again: another worker may have renewed it while this one waited.
+    let (spent, oauth) = match current(store, directory, &host, now)? {
+        Current::Ready(token) => return Ok(token),
+        Current::Due { spent, oauth } => (spent, oauth),
     };
     tracing::info!(
         category = "orchestrator_gitlab",
         "Renewing a GitLab sign-in"
     );
-    match renew(oauth, now) {
+    match renew(&oauth, now) {
         Ok(renewed) => {
-            // GitLab already spent the old refresh token: keep the new pair
-            // before anything uses it.
             let access = renewed.access.clone();
-            write_in(store, directory, host, Some(Kept::OAuth(renewed)))?;
+            keep_renewed(Unsaved {
+                store,
+                directory: directory.to_owned(),
+                host,
+                spent,
+                renewed,
+            });
             Ok(Some(access))
         }
         Err(error) => {
@@ -299,9 +330,102 @@ pub fn token_in(
                 %error,
                 "A GitLab sign-in could not be renewed"
             );
-            Ok(Some(oauth.access.clone()))
+            Ok(Some(oauth.access))
         }
     }
+}
+
+/// What the store holds for an instance, read under [`RECORD`].
+enum Current {
+    Ready(Option<SecretString>),
+    /// An OAuth sign-in to renew: `oauth`, renewed from the store's pair,
+    /// whose refresh token is `spent` once `oauth` is renewed.
+    Due {
+        spent: SecretString,
+        oauth: OAuth,
+    },
+}
+
+fn current(store: Store, directory: &Path, host: &str, now: u64) -> Result<Current, Error> {
+    let _record = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+    let saved = read_in(store, directory)?;
+    let kept = match saved.kept(host) {
+        Some(Kept::OAuth(kept)) => kept,
+        other => return Ok(Current::Ready(other.map(Kept::token).cloned())),
+    };
+    let oauth = unsaved(store, directory, host, kept).unwrap_or_else(|| kept.clone());
+    Ok(if oauth.due(now) {
+        Current::Due {
+            spent: kept.refresh.clone(),
+            oauth,
+        }
+    } else {
+        Current::Ready(Some(oauth.access))
+    })
+}
+
+/// The pair renewed from `kept` that the store refused, written again now.
+/// Call it with [`RECORD`] held.
+fn unsaved(store: Store, directory: &Path, host: &str, kept: &OAuth) -> Option<OAuth> {
+    let mut unsaved = UNSAVED.lock().unwrap_or_else(PoisonError::into_inner);
+    let index = unsaved.iter().position(|entry| {
+        entry.store == store && entry.directory == directory && entry.host == host
+    })?;
+    let entry = unsaved.swap_remove(index);
+    // The sign-in changed since, as a Disconnect or a new Connect does.
+    if entry.spent.expose_secret() != kept.refresh.expose_secret() {
+        return None;
+    }
+    let renewed = entry.renewed.clone();
+    if let Err(error) = write_in(store, directory, host, Some(Kept::OAuth(renewed.clone()))) {
+        tracing::warn!(
+            category = "orchestrator_gitlab",
+            %error,
+            "A renewed GitLab sign-in still could not be saved"
+        );
+        unsaved.push(entry);
+    }
+    Some(renewed)
+}
+
+/// Keeps `entry`'s renewed pair, unless the sign-in changed while GitLab
+/// renewed it. A store that refuses it leaves it in [`UNSAVED`], since GitLab
+/// already spent the pair the store holds.
+fn keep_renewed(entry: Unsaved) {
+    let Unsaved {
+        store,
+        directory,
+        host,
+        spent,
+        renewed,
+    } = &entry;
+    let _record = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+    let saved = match read_in(*store, directory) {
+        Ok(saved) => saved,
+        Err(error) => return keep_unsaved(entry, &error),
+    };
+    if !matches!(
+        saved.kept(host),
+        Some(Kept::OAuth(kept)) if kept.refresh.expose_secret() == spent.expose_secret()
+    ) {
+        return;
+    }
+    if let Err(error) = write_in(*store, directory, host, Some(Kept::OAuth(renewed.clone()))) {
+        keep_unsaved(entry, &error);
+    }
+}
+
+fn keep_unsaved(entry: Unsaved, error: &Error) {
+    tracing::warn!(
+        category = "orchestrator_gitlab",
+        %error,
+        "A renewed GitLab sign-in could not be saved; it is kept until it can be"
+    );
+    let mut unsaved = UNSAVED.lock().unwrap_or_else(PoisonError::into_inner);
+    unsaved.retain(|kept| {
+        !(kept.store == entry.store && kept.directory == entry.directory && kept.host == entry.host)
+    });
+    unsaved.push(entry);
 }
 
 /// Saves a pasted `token` for `host` in `store`, or forgets the host's

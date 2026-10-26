@@ -14,6 +14,7 @@ use herdr_orchestrator::gitlab::{
 };
 use std::{path::PathBuf, sync::Arc};
 
+mod recheck;
 mod saves;
 
 fn page(cx: &mut TestAppContext) -> (Entity<HerdrWindow>, &mut VisualTestContext) {
