@@ -20,6 +20,7 @@ mod gitlab_saved_turns;
 mod gitlab_sign_in;
 mod incremental;
 mod keys;
+mod line_endings;
 mod location;
 mod naming;
 #[cfg(unix)]
