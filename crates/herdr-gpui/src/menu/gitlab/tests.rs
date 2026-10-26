@@ -14,6 +14,8 @@ use herdr_orchestrator::gitlab::{
 };
 use std::{path::PathBuf, sync::Arc};
 
+mod saves;
+
 fn page(cx: &mut TestAppContext) -> (Entity<HerdrWindow>, &mut VisualTestContext) {
     let (view, cx) = cx.add_window_view(crate::sidebar::layout_tests::fixture_window);
     cx.simulate_resize(size(px(1200.), px(900.)));
@@ -482,7 +484,7 @@ fn work_finished_in_the_background_refreshes_every_window(cx: &mut TestAppContex
     // The other windows are read and updated after this window's own update
     // ends; inside it, GPUI panicked on reading the window's root view twice.
     view.update(cx, |view, cx| {
-        view.run_gitlab(cx, false, || Ok("Forgot the token.".into()));
+        view.run_gitlab(cx, None, || Ok("Forgot the token.".into()));
     });
     draw(cx);
     view.read_with(cx, |view, _| {

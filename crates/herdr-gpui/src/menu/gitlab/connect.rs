@@ -58,10 +58,12 @@ impl HerdrWindow {
             return;
         };
         self.menu.gitlab.message = None;
+        // The account is checked where the instance's remotes read it.
+        let api = self.menu.gitlab.apis.get(&host).cloned();
         let task = cx.spawn({
             let host = host.clone();
             async move |this, cx| {
-                let result = connect(&this, &host, application, store, cx).await;
+                let result = connect(&this, &host, api, application, store, cx).await;
                 let _ = this.update(cx, |this, cx| {
                     this.menu.gitlab.connecting = None;
                     this.menu.gitlab.message = Some(match &result {
@@ -119,6 +121,7 @@ impl HerdrWindow {
 async fn connect(
     this: &WeakEntity<HerdrWindow>,
     host: &str,
+    api: Option<Api>,
     application: String,
     store: herdr_credentials::Store,
     cx: &mut AsyncApp,
@@ -158,8 +161,10 @@ async fn connect(
                 let host = host.to_owned();
                 return cx
                     .background_spawn(async move {
-                        // glab may serve the instance's API elsewhere.
-                        let api = Api::of_instance(&host, &cli_hosts::read());
+                        // An instance no remote reads goes where glab sends
+                        // its API.
+                        let api =
+                            api.unwrap_or_else(|| Api::of_instance(&host, &cli_hosts::read()));
                         let user = account::whoami(&api, &pair.access)?.username;
                         saved::save_kept(store, &host, Some(Kept::OAuth(pair)))?;
                         Ok(user)
