@@ -259,18 +259,24 @@ impl HerdrWindow {
         self.reads_credentials().then(|| self.config.gitlab.store())
     }
 
-    /// Lists every main window's GitLab instances and those with a saved
-    /// token, then looks each up on its own. Without a store the page still
-    /// lists the instances, with no token.
+    /// [`Self::check_gitlab_hosts`] from inside this window's update, as
+    /// opening the page is: GPUI leaves the window out of the other windows'
+    /// read, so its own instances are added here.
     fn check_gitlab(&mut self, cx: &mut Context<Self>) {
-        let own = self.orchestrator_gitlab_hosts(cx);
-        self.menu.gitlab.preferred = own
+        let mut listed = HerdrWindow::all_orchestrator_gitlab_hosts(cx);
+        listed.extend(self.orchestrator_gitlab_hosts(cx));
+        self.check_gitlab_hosts(listed, cx);
+    }
+
+    /// Lists `listed`, every main window's GitLab instances, with those that
+    /// have a saved token, then looks each up on its own. Without a store
+    /// the page still lists the instances, with no token.
+    fn check_gitlab_hosts(&mut self, listed: Vec<GitLabRead>, cx: &mut Context<Self>) {
+        self.menu.gitlab.preferred = self
+            .orchestrator_gitlab_hosts(cx)
             .iter()
             .map(|read| saved::normalize_host(&read.host).unwrap_or_else(|| read.host.clone()))
             .collect();
-        // This window is being updated, so the others are read without it.
-        let mut listed = HerdrWindow::all_orchestrator_gitlab_hosts(cx);
-        listed.extend(own);
         self.menu.gitlab._lookups.clear();
         let Some(store) = self.gitlab_store() else {
             self.menu.gitlab._task = None;
@@ -488,6 +494,7 @@ impl HerdrWindow {
         let task = cx.background_spawn(async move { work() });
         self.menu.gitlab._save = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
+            let changed = result.is_ok();
             let _ = this.update(cx, |this, cx| {
                 this.menu.gitlab.working = false;
                 if saves_token
@@ -500,12 +507,24 @@ impl HerdrWindow {
                     Ok(done) => done,
                     Err(error) => error.to_string(),
                 });
-                this.credentials_changed_everywhere(cx);
-                this.check_gitlab(cx);
                 cx.notify();
             });
+            Self::gitlab_changed(&this, changed, cx);
         }));
         cx.notify();
+    }
+
+    /// After a save, forget, or connection finished in the background:
+    /// every window's views sync again when a token `changed`, and the page
+    /// looks its instances up again. It runs between updates, never inside
+    /// this window's own: GPUI panics when an entity it is updating is read
+    /// or updated again.
+    pub(super) fn gitlab_changed(this: &WeakEntity<Self>, changed: bool, cx: &mut AsyncApp) {
+        if changed {
+            cx.update(HerdrWindow::refresh_all_orchestrators);
+        }
+        let listed = cx.update(|cx| HerdrWindow::all_orchestrator_gitlab_hosts(cx));
+        let _ = this.update(cx, |this, cx| this.check_gitlab_hosts(listed, cx));
     }
 
     /// Keys while the GitLab page shows. The fields edit themselves; Enter

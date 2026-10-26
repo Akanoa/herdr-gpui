@@ -389,3 +389,20 @@ fn a_headless_window_connects_nothing(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn work_finished_in_the_background_refreshes_every_window(cx: &mut TestAppContext) {
+    let (view, cx) = page(cx);
+    // The other windows are read and updated after this window's own update
+    // ends; inside it, GPUI panicked on reading the window's root view twice.
+    view.update(cx, |view, cx| {
+        view.run_gitlab(cx, false, || Ok("Forgot the token.".into()));
+    });
+    draw(cx);
+    view.read_with(cx, |view, _| {
+        let gitlab = &view.menu.gitlab;
+        assert!(!gitlab.working);
+        assert_eq!(gitlab.message.as_deref(), Some("Forgot the token."));
+        assert!(gitlab.hosts.iter().any(|host| host.host == "gitlab.com"));
+    });
+}

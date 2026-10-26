@@ -68,12 +68,9 @@ impl HerdrWindow {
                         Ok(user) => format!("Connected. GitLab at {host} signs in as {user}."),
                         Err(error) => error.to_string(),
                     });
-                    if result.is_ok() {
-                        this.credentials_changed_everywhere(cx);
-                    }
-                    this.check_gitlab(cx);
                     cx.notify();
                 });
+                HerdrWindow::gitlab_changed(&this, result.is_ok(), cx);
             }
         });
         self.menu.gitlab.connecting = Some(Connecting {
