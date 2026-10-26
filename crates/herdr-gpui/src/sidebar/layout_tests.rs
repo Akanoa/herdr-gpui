@@ -85,6 +85,8 @@ mod search;
 #[cfg(test)]
 mod selection_scroll;
 #[cfg(test)]
+mod short_list_scroll;
+#[cfg(test)]
 mod sidebar_cache;
 #[cfg(test)]
 mod spacing_overrides;
