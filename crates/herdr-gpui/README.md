@@ -173,9 +173,16 @@ disable remain available through `herdr machine`.
 The fixed bottom-left device picker offers **All Devices**, **Local**, saved SSH
 devices, and **Add Device…**. All Devices shows Spaces and Agents across hosts
 without changing the active terminal. Choosing a device filters both lists and
-switches the terminal through the existing surface handoff. While filtered,
-navigation to another device follows that device; removal or disable falls back
-to Local. The filter is window-local and starts at All Devices. The adjacent gear
+switches the terminal through the existing surface handoff. To list a few
+devices instead of one, `Cmd`-click (`Ctrl`-click on Linux and Windows) each
+device, or press Space on the highlighted row; the picker stays open and the
+footer reads "2 Devices". Picking from All Devices starts with the device on
+screen, picking every device returns to All Devices, and the last listed device
+cannot be taken away. Taking away the device on screen switches the terminal to
+the first device still listed. While filtered, navigation to a device outside
+the list narrows it to that device; a listed device that is removed or disabled
+leaves the list, and if it was on screen the terminal falls back to Local. The
+filter is window-local and starts at All Devices. The adjacent gear
 opens the existing Settings page (also available with `Cmd-,`). Beside it, the
 sessions icon lists this machine's sessions and each saved device's own, grouped
 under the device, with the device this window is on leading (also available with

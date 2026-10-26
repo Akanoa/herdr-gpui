@@ -169,7 +169,7 @@ impl HerdrWindow {
             daemon_text: Default::default(),
             deliveries: Default::default(),
             device_drag: None,
-            device_filter: None,
+            device_filter: Default::default(),
             device_order: Vec::new(),
             device_themes: Default::default(),
             devices_overview: Default::default(),

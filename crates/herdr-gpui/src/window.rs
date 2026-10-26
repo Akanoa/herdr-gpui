@@ -171,7 +171,8 @@ pub(crate) struct HerdrWindow {
     pub(crate) deliveries: crate::agent_notes::Deliveries,
     /// A press on a device's header that may lift it for reordering.
     pub(crate) device_drag: Option<sidebar::DeviceDrag>,
-    pub(crate) device_filter: Option<String>,
+    /// The devices the sidebar lists.
+    pub(crate) device_filter: menu::DeviceScope,
     /// The device IDs in the order the user dragged them into; see
     /// `endpoint::order`.
     pub(crate) device_order: Vec<String>,

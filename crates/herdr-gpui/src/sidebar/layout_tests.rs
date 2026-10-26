@@ -32,6 +32,8 @@ mod configured_rows;
 mod device_footer;
 #[cfg(test)]
 mod device_footer_setting;
+#[cfg(test)]
+mod device_multi_select;
 #[cfg(all(test, feature = "azure"))]
 mod device_removing;
 #[cfg(test)]
@@ -634,7 +636,7 @@ pub(crate) fn fixture_window(window: &mut Window, cx: &mut Context<HerdrWindow>)
         sidebar_start_pending: true,
         status_bar_visible: true,
         zen: Default::default(),
-        device_filter: None,
+        device_filter: Default::default(),
         endpoints: vec![crate::endpoint::Endpoint::new(
             crate::endpoint::LOCAL.into(),
             "Local".into(),
