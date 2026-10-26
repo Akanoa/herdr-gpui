@@ -15,6 +15,7 @@ use herdr_orchestrator::gitlab::{
 use std::{path::PathBuf, sync::Arc};
 
 mod keyboard;
+mod plain_saved;
 mod recheck;
 mod saves;
 mod welcome;

@@ -8,6 +8,49 @@ use crate::{HerdrWindow, menu::Page};
 use gpui::{prelude::*, *};
 use herdr_orchestrator::gitlab::account::Source;
 
+/// Which way Tab moves the selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    Forward,
+    Back,
+}
+
+/// What a key does on the GitLab page, apart from typing into its fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitLabKey {
+    /// Escape: folds the token form, else closes the menu.
+    Dismiss,
+    /// Enter: saves the token form, else uses the selected control.
+    Enter,
+    /// Space: uses the selected control; in a field it types a space.
+    Space,
+    /// Tab or Shift-Tab: the form's other field, else the next or previous
+    /// control.
+    Move(Step),
+}
+
+impl GitLabKey {
+    fn of(keystroke: &Keystroke) -> Option<Self> {
+        let modifiers = keystroke.modifiers;
+        let bare = modifiers == Modifiers::default();
+        let plain = !modifiers.control && !modifiers.platform && !modifiers.alt;
+        Some(match keystroke.key.as_str() {
+            "escape" => Self::Dismiss,
+            "enter" if bare => Self::Enter,
+            "space" if bare => Self::Space,
+            "tab" if plain && modifiers.shift => Self::Move(Step::Back),
+            "tab" if plain => Self::Move(Step::Forward),
+            _ => return None,
+        })
+    }
+
+    /// The key acts on the page even while a field of the token form has
+    /// focus.
+    fn leaves_field(self) -> bool {
+        !matches!(self, Self::Space)
+    }
+}
+
 /// A control on the GitLab page, as the keyboard selects it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -164,26 +207,28 @@ impl HerdrWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let key = event.keystroke.key.as_str();
-        let modifiers = event.keystroke.modifiers;
+        let key = GitLabKey::of(&event.keystroke);
         let fields = [&self.menu.gitlab.host, &self.menu.gitlab.token];
         let focused = fields
             .iter()
             .flat_map(|field| field.as_ref())
             .find(|input| input.read(cx).focus.is_focused(window));
         if let Some(input) = focused
-            && (input.read(cx).is_composing() || !matches!(key, "escape" | "enter" | "tab"))
+            && (input.read(cx).is_composing() || !key.is_some_and(GitLabKey::leaves_field))
         {
             return;
         }
         cx.stop_propagation();
         window.prevent_default();
+        let Some(key) = key else {
+            return;
+        };
         let gitlab = &self.menu.gitlab;
         if gitlab.form {
             match key {
-                "escape" => self.hide_gitlab_form(window, cx),
-                "enter" if !gitlab.working => self.save_gitlab(cx),
-                "tab" => {
+                GitLabKey::Dismiss => self.hide_gitlab_form(window, cx),
+                GitLabKey::Enter if !gitlab.working => self.save_gitlab(cx),
+                GitLabKey::Move(_) => {
                     let next = match focused {
                         Some(input) if Some(input) == gitlab.host.as_ref() => &gitlab.token,
                         _ => &gitlab.host,
@@ -193,28 +238,27 @@ impl HerdrWindow {
                         window.focus(&focus, cx);
                     }
                 }
-                _ => {}
+                GitLabKey::Enter | GitLabKey::Space => {}
             }
             cx.notify();
             return;
         }
-        let plain = !modifiers.control && !modifiers.platform && !modifiers.alt;
         match key {
-            "tab" if plain => {
+            GitLabKey::Move(step) => {
                 let actions = gitlab.actions();
                 let at = gitlab
                     .selected
                     .as_ref()
                     .and_then(|selected| actions.iter().position(|action| action == selected));
-                let next = match (at, modifiers.shift) {
-                    (None, false) => 0,
-                    (None, true) => actions.len() - 1,
-                    (Some(at), false) => (at + 1) % actions.len(),
-                    (Some(at), true) => (at + actions.len() - 1) % actions.len(),
+                let next = match (at, step) {
+                    (None, Step::Forward) => 0,
+                    (None, Step::Back) => actions.len() - 1,
+                    (Some(at), Step::Forward) => (at + 1) % actions.len(),
+                    (Some(at), Step::Back) => (at + actions.len() - 1) % actions.len(),
                 };
                 self.menu.gitlab.selected = actions.get(next).cloned();
             }
-            "enter" | "space" if modifiers == Modifiers::default() => {
+            GitLabKey::Enter | GitLabKey::Space => {
                 // A control that went away since it was selected is not used.
                 if let Some(action) = gitlab
                     .selected
@@ -224,8 +268,7 @@ impl HerdrWindow {
                     self.gitlab_action(action, window, cx);
                 }
             }
-            "escape" => self.dismiss_menu(window, cx),
-            _ => {}
+            GitLabKey::Dismiss => self.dismiss_menu(window, cx),
         }
         cx.notify();
     }

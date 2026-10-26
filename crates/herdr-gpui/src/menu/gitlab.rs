@@ -200,7 +200,9 @@ pub(crate) fn status_line(status: &HostStatus) -> String {
 /// host becomes the instance whose `ssh_host` glab names it, and a saved
 /// instance keeps glab's `api_host` for it. An instance is plain only when
 /// every remote reads it over HTTP, since one HTTPS remote is enough to
-/// send a token.
+/// send a token. A saved token adds an instance no remote reads, but never
+/// changes how a listed one is read: its API defaults to HTTPS, which would
+/// hide that the remotes withhold the token.
 pub(crate) fn merge_hosts(
     listed: impl IntoIterator<Item = GitLabRead>,
     saved: impl IntoIterator<Item = String>,
@@ -215,10 +217,14 @@ pub(crate) fn merge_hosts(
         api: Api::of_instance(&host, cli),
         checkout: None,
     });
-    for mut entry in listed.chain(saved) {
+    let entries = listed
+        .map(|entry| (entry, true))
+        .chain(saved.map(|entry| (entry, false)));
+    for (mut entry, read) in entries {
         entry.api.instance =
             saved::normalize_host(&entry.api.instance).unwrap_or(entry.api.instance);
         match hosts.get_mut(&entry.api.instance) {
+            Some(_) if !read => {}
             Some(known) => {
                 if known.api.scheme == Scheme::Http && entry.api.scheme == Scheme::Https {
                     known.api = entry.api;
@@ -568,8 +574,19 @@ impl HerdrWindow {
                 Some(gitlab::Error::InsecureHost(host).to_string())
             }
             Some(_) if token.is_empty() => Some("Paste a personal access token first.".to_owned()),
-            Some(_) if self.gitlab_store().is_none() => Some(NO_STORE.to_owned()),
-            Some(_) => None,
+            Some(host) => {
+                // The pasted token is the user's later choice: an approval
+                // still awaited for the instance would replace it, maybe
+                // with another account, so that wait stops.
+                if gitlab
+                    .connecting
+                    .as_ref()
+                    .is_some_and(|connecting| connecting.host == host)
+                {
+                    self.menu.gitlab.connecting = None;
+                }
+                self.gitlab_store().is_none().then(|| NO_STORE.to_owned())
+            }
         };
         if let Some(failure) = failure {
             self.menu.gitlab.message = Some(failure);

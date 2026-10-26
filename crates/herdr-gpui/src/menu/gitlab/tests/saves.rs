@@ -43,3 +43,20 @@ fn a_finished_save_keeps_a_token_typed_after_it(cx: &mut TestAppContext) {
         assert_eq!(token.is_empty(), cleared, "{typed}");
     }
 }
+
+#[gpui::test]
+fn a_token_pasted_while_connect_waits_stops_that_wait(cx: &mut TestAppContext) {
+    let (view, cx) = page(cx);
+    for (waiting, stopped) in [("gitlab.com", true), ("gitlab.example.com", false)] {
+        view.update(cx, |view, _| {
+            view.menu.gitlab.connecting = Some(super::super::connect::Connecting::fixture(
+                waiting,
+                "ABCD-1234",
+            ));
+        });
+        type_in(&view, cx, "gitlab.com", "glpat-pasted");
+        view.update(cx, |view, cx| view.save_gitlab(cx));
+        let waits = view.read_with(cx, |view, _| view.menu.gitlab.connecting.is_some());
+        assert_eq!(waits, !stopped, "{waiting}");
+    }
+}
