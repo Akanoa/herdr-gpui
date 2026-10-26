@@ -65,7 +65,6 @@ fn a_sign_in_disconnected_during_a_renewal_stays_disconnected() {
     assert_eq!(kept(path, "gitlab.com"), None);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_renewed_pair_the_store_refuses_is_used_and_saved_later() {
     use std::{fs, os::unix::fs::PermissionsExt};

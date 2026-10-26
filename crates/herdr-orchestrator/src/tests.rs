@@ -13,6 +13,8 @@ mod gitlab;
 mod gitlab_envrc;
 mod gitlab_hosts;
 mod gitlab_oauth;
+// The private credential file these save to is Unix-only.
+#[cfg(unix)]
 mod gitlab_renewal;
 mod gitlab_saved_turns;
 mod gitlab_sign_in;
