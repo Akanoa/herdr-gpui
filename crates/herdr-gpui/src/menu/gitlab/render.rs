@@ -4,6 +4,7 @@
 use super::{HostStatus, Token, connect::Connecting, status_line};
 use crate::{HerdrWindow, fonts::StyledFont, menu::Page, search_input::SearchInput};
 use gpui::{prelude::*, *};
+use herdr_orchestrator::gitlab::account::Source;
 
 /// The official GitLab mark, drawn in one color as the GitHub mark is.
 pub(crate) fn gitlab_mark(color: u32) -> Svg {
@@ -23,6 +24,9 @@ impl HerdrWindow {
             div()
                 .id(id)
                 .debug_selector(move || id.into())
+                .role(Role::Tab)
+                .aria_label(label)
+                .aria_selected(shown)
                 .flex()
                 .items_center()
                 .gap(px(8.))
@@ -96,6 +100,8 @@ impl HerdrWindow {
                 div()
                     .id("github-header-close")
                     .debug_selector(|| "github-header-close".into())
+                    .role(Role::Button)
+                    .aria_label("Close")
                     .cursor_pointer()
                     .px(px(8.))
                     .py(px(4.))
@@ -115,16 +121,19 @@ impl HerdrWindow {
     fn gitlab_button(
         &self,
         id: impl Into<SharedString>,
-        label: &'static str,
+        label: impl Into<SharedString>,
         primary: bool,
         enabled: bool,
     ) -> Stateful<Div> {
         let theme = &self.theme;
         let accent = crate::menu::accent(theme);
         let id: SharedString = id.into();
+        let label: SharedString = label.into();
         div()
             .id(id.clone())
             .debug_selector(move || id.to_string())
+            .role(Role::Button)
+            .aria_label(label.clone())
             .flex_none()
             .px(px(12.))
             .py(px(6.))
@@ -143,22 +152,158 @@ impl HerdrWindow {
                     .cursor_pointer()
                     .hover(move |style| style.border_color(accent))
             })
-            .child(crate::sidebar::label_text(label))
+            .child(crate::sidebar::label_text(&label))
     }
 
+    /// An instance's card: the account's picture and name, the instance with
+    /// where its token comes from, and what can be done about it.
     fn render_gitlab_host(&self, index: usize, status: &HostStatus, cx: &mut Context<Self>) -> Div {
         let theme = &self.theme;
         let gitlab = &self.menu.gitlab;
+        let user = match &status.token {
+            Token::Found {
+                user: Some(Ok(user)),
+                ..
+            } => Some(user),
+            _ => None,
+        };
+        let picture = user
+            .and_then(|user| user.avatar_url.as_deref())
+            .and_then(|url| gitlab.avatars.get(url));
+        let source = match &status.token {
+            Token::Found { source, .. } => Some(source_chip(*source, status)),
+            Token::None if !status.plain => Some("no token"),
+            _ => None,
+        };
+        let (title, detail) = match (user, &status.token) {
+            (Some(user), _) => (format!("@{}", user.username), None),
+            (None, Token::None) if !status.plain => ("Not connected".to_owned(), None),
+            _ => (status.host.clone(), Some(status_line(status))),
+        };
+        let mut chip = source.map(|label| {
+            div()
+                .debug_selector(move || format!("gitlab-source-{index}"))
+                .flex_none()
+                .px(px(6.))
+                .rounded(px(crate::config::corners::SMALL))
+                .bg(rgb(theme.active))
+                .text_color(rgb(theme.subtext()))
+                .text_size(px(self.config.ui.size - 1.))
+                .child(label)
+        });
+        let connecting = gitlab
+            .connecting
+            .as_ref()
+            .filter(|connecting| connecting.host == status.host);
+        let actions = self.render_gitlab_actions(index, status, user.is_some(), cx);
+        div()
+            .debug_selector(move || format!("gitlab-host-{index}"))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .p(px(12.))
+            .rounded(px(crate::config::corners::PANEL))
+            .border_1()
+            .border_color(rgb(theme.active))
+            .bg(rgb(theme.background))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .debug_selector(move || format!("gitlab-avatar-{index}"))
+                            .flex_none()
+                            .size(px(36.))
+                            .rounded_full()
+                            .overflow_hidden()
+                            .child(match picture {
+                                // Round the image itself: GPUI clips overflow
+                                // to the box, not to its corner radii.
+                                Some(image) => {
+                                    img(image).size_full().rounded_full().into_any_element()
+                                }
+                                None => gitlab_mark(theme.muted).size_full().into_any_element(),
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(title),
+                                    )
+                                    // With an explanation below, the chip
+                                    // rides the title line.
+                                    .when(detail.is_some(), |line| line.children(chip.take())),
+                            )
+                            .when(detail.is_none(), |column| {
+                                column.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_color(rgb(theme.muted))
+                                                .child(status.host.clone()),
+                                        )
+                                        .children(chip.take()),
+                                )
+                            })
+                            .children(detail.map(|detail| {
+                                div().text_color(rgb(theme.subtext())).child(detail)
+                            })),
+                    )
+                    .child(actions),
+            )
+            .children(connecting.map(|connecting| self.render_gitlab_connecting(connecting, cx)))
+    }
+
+    /// A card's buttons: Connect where an application can sign in and no
+    /// account is, Disconnect or Forget for what is saved here, else the
+    /// checkout whose `.envrc` gives the token.
+    fn render_gitlab_actions(
+        &self,
+        index: usize,
+        status: &HostStatus,
+        signed_in: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let gitlab = &self.menu.gitlab;
         let ready = !gitlab.working && gitlab.connecting.is_none();
-        let signed_in = matches!(
+        let host = status.host.clone();
+        // A token from an .envrc or the shell is tried before a connected
+        // account, so connecting would change nothing.
+        let shadowed = matches!(
             status.token,
             Token::Found {
-                user: Some(Ok(_)),
+                source: Source::Envrc | Source::Environment,
                 ..
             }
         );
-        let host = status.host.clone();
-        let remove = (status.saved).then(|| {
+        let connect =
+            (status.can_connect && !status.connected && !signed_in && !shadowed).then(|| {
+                self.gitlab_connect_button(format!("gitlab-connect-{index}"), "Connect", &host, cx)
+            });
+        let remove = status.saved.then(|| {
             let label = if status.connected {
                 "Disconnect"
             } else {
@@ -173,63 +318,168 @@ impl HerdrWindow {
                     }))
                 })
         });
-        let connect = (status.can_connect && !status.connected).then(|| {
-            let host = host.clone();
-            self.gitlab_button(
-                format!("gitlab-connect-{index}"),
-                "Connect",
-                !signed_in,
-                ready,
-            )
+        let from = (connect.is_none() && remove.is_none())
+            .then(|| match (&status.token, &status.checkout) {
+                (
+                    Token::Found {
+                        source: Source::Envrc,
+                        ..
+                    },
+                    Some(checkout),
+                ) => Some(format!("from {checkout}/")),
+                _ => None,
+            })
+            .flatten();
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap(px(6.))
+            .children(connect)
+            .children(remove)
+            .children(from.map(|from| {
+                div()
+                    .max_w(px(120.))
+                    .truncate()
+                    .text_color(rgb(self.theme.muted))
+                    .child(from)
+            }))
+    }
+
+    fn gitlab_connect_button(
+        &self,
+        id: String,
+        label: impl Into<SharedString>,
+        host: &str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let gitlab = &self.menu.gitlab;
+        let ready = !gitlab.working && gitlab.connecting.is_none();
+        let host = host.to_owned();
+        self.gitlab_button(id, label, true, ready)
             .when(ready, |button| {
                 button.on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     this.connect_gitlab(host.clone(), cx);
                 }))
             })
+    }
+
+    /// The page when no instance has a token yet: one button connects the
+    /// instance this window reads, and a token is the second choice.
+    fn render_gitlab_welcome(&self, cx: &mut Context<Self>) -> Div {
+        let theme = &self.theme;
+        let gitlab = &self.menu.gitlab;
+        let lead = gitlab
+            .hosts
+            .iter()
+            .position(|status| status.can_connect)
+            .unwrap_or(0);
+        let status = gitlab.hosts.get(lead);
+        let host = status.map_or("gitlab.com", |status| status.host.as_str());
+        let read_by = status
+            .and_then(|status| status.checkout.as_deref())
+            .map(|checkout| format!(" for {checkout}"))
+            .unwrap_or_default();
+        let others: Vec<&str> = gitlab
+            .hosts
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != lead)
+            .map(|(_, status)| status.host.as_str())
+            .collect();
+        let connect = status.filter(|status| status.can_connect).map(|_| {
+            self.gitlab_connect_button(
+                format!("gitlab-connect-{lead}"),
+                format!("Connect {host}"),
+                host,
+                cx,
+            )
         });
         let connecting = gitlab
             .connecting
             .as_ref()
-            .filter(|connecting| connecting.host == status.host);
+            .filter(|connecting| connecting.host == host);
         div()
-            .debug_selector(move || format!("gitlab-host-{index}"))
+            .debug_selector(|| "gitlab-welcome".into())
             .py(px(8.))
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .items_center()
+            .gap(px(12.))
+            .child(gitlab_mark(theme.foreground).size(px(44.)))
             .child(
                 div()
-                    .flex()
-                    .items_start()
-                    .gap(px(10.))
-                    .child(gitlab_mark(theme.muted).mt(px(2.)).size(px(16.)))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(px(self.config.ui.size * 1.2))
+                    .child("Connect your GitLab account"),
+            )
+            .child(
+                div()
+                    .text_center()
+                    .text_color(rgb(theme.subtext()))
+                    .child(format!(
+                        "The Orchestrator reads issues from {host}{read_by}. Public projects list \
+                         without an account; connect for private ones."
+                    )),
+            )
+            .when(!others.is_empty(), |welcome| {
+                welcome.child(
+                    div()
+                        .text_center()
+                        .text_color(rgb(theme.muted))
+                        .child(format!("Also read: {}", others.join(", "))),
+                )
+            })
+            .children(connect)
+            .children(connecting.map(|connecting| self.render_gitlab_connecting(connecting, cx)))
+            .child(self.gitlab_link(
+                "gitlab-paste",
+                if connect_shown(status) {
+                    "Use a personal access token instead"
+                } else {
+                    "Paste a personal access token"
+                },
+                false,
+                cx,
+            ))
+            .child(
+                div()
+                    .mt(px(4.))
+                    .p(px(10.))
+                    .rounded(px(crate::config::corners::CONTROL))
+                    .bg(rgb(theme.background))
+                    .text_color(rgb(theme.muted))
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(crate::sidebar::label_text(&status.host)),
-                            )
-                            .child(
-                                div()
-                                    .text_color(rgb(theme.subtext()))
-                                    .child(status_line(status)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_end()
-                            .gap(px(6.))
-                            .children(connect)
-                            .children(remove),
+                        "Already set up? GITLAB_TOKEN in a project's .envrc or your shell, and \
+                         glab, are picked up on their own.",
                     ),
             )
-            .children(connecting.map(|connecting| self.render_gitlab_connecting(connecting, cx)))
+    }
+
+    /// A link that opens the token form; `add` starts it at a new instance.
+    fn gitlab_link(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let accent = crate::menu::accent(&self.theme);
+        div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .role(Role::Link)
+            .aria_label(label)
+            .cursor_pointer()
+            .text_color(accent)
+            .hover(|style| style.underline())
+            .child(label)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.show_gitlab_form(add, window, cx);
+            }))
     }
 
     /// The code to approve on GitLab, and the buttons that copy it, open
@@ -313,6 +563,13 @@ impl HerdrWindow {
         let theme = &self.theme;
         let gitlab = &self.menu.gitlab;
         let ready = !gitlab.working;
+        // Nothing has a token, and some instance could take one.
+        let welcome = !gitlab.form
+            && gitlab.hosts.iter().any(|status| !status.plain)
+            && gitlab
+                .hosts
+                .iter()
+                .all(|status| matches!(status.token, Token::None));
         let field =
             |label: &'static str, selector: &'static str, input: &Option<Entity<SearchInput>>| {
                 div()
@@ -326,6 +583,24 @@ impl HerdrWindow {
                             .child(input.clone())
                     }))
             };
+        let form = gitlab.form.then(|| {
+            div()
+                .debug_selector(|| "gitlab-token".into())
+                .flex()
+                .flex_col()
+                .gap(px(10.))
+                .child(div().text_color(rgb(theme.muted)).child(
+                    "For an instance without Connect. The token needs the read_api scope; \
+                     GitLab is asked whom it signs in as before it is saved, only ever over \
+                     HTTPS. GITLAB_TOKEN in the project's .envrc or your shell is used before it.",
+                ))
+                .child(field("Instance", "gitlab-host-input", &gitlab.host))
+                .child(field(
+                    "Personal access token",
+                    "gitlab-token-input",
+                    &gitlab.token,
+                ))
+        });
         let body = div()
             .id("gitlab-body")
             .debug_selector(|| "gitlab-body".into())
@@ -334,47 +609,33 @@ impl HerdrWindow {
             .p(px(16.))
             .flex()
             .flex_col()
+            .gap(px(10.))
             .children(gitlab.problem.clone().map(|problem| {
                 div()
                     .debug_selector(|| "gitlab-problem".into())
-                    .mb(px(8.))
                     .text_color(rgb(theme.ink(theme.palette[1])))
                     .child(problem)
             }))
-            .children(
-                gitlab
-                    .hosts
-                    .iter()
-                    .enumerate()
-                    .map(|(index, status)| self.render_gitlab_host(index, status, cx)),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "gitlab-token".into())
-                    .mt(px(12.))
-                    .pt(px(12.))
-                    .border_t_1()
-                    .border_color(rgb(theme.active))
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(div().text_color(rgb(theme.muted)).child(
-                        "Connect signs in through GitLab in your browser. GITLAB_TOKEN in \
-                         the project's .envrc (through direnv) or your shell is tried first, \
-                         and glab last. A pasted token needs the read_api scope; GitLab is \
-                         asked whom it signs in as before it is saved, only ever over HTTPS.",
-                    ))
-                    .child(field("Instance", "gitlab-host-input", &gitlab.host))
-                    .child(field(
-                        "Personal access token",
-                        "gitlab-token-input",
-                        &gitlab.token,
-                    )),
-            )
+            .when(welcome, |body| body.child(self.render_gitlab_welcome(cx)))
+            .when(!welcome && !gitlab.form, |body| {
+                body.children(
+                    gitlab
+                        .hosts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, status)| self.render_gitlab_host(index, status, cx)),
+                )
+                .child(self.gitlab_link(
+                    "gitlab-paste",
+                    "Paste a token for an instance\u{2026}",
+                    false,
+                    cx,
+                ))
+            })
+            .children(form)
             .children(gitlab.message.clone().map(|message| {
                 div()
                     .debug_selector(|| "gitlab-message".into())
-                    .mt(px(10.))
                     .p(px(10.))
                     .rounded(px(crate::config::corners::CONTROL))
                     .bg(rgb(theme.background))
@@ -387,15 +648,40 @@ impl HerdrWindow {
             .border_color(rgb(theme.active))
             .flex()
             .justify_end()
-            .child(
-                self.gitlab_button("gitlab-save", "Check and save", true, ready)
-                    .when(ready, |button| {
-                        button.on_click(cx.listener(|this, _, _, cx| {
+            .gap(px(8.));
+        let footer = if gitlab.form {
+            Some(
+                footer
+                    .child(
+                        self.gitlab_button("gitlab-form-cancel", "Cancel", false, true)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.hide_gitlab_form(window, cx);
+                            })),
+                    )
+                    .child(
+                        self.gitlab_button("gitlab-save", "Check and save", true, ready)
+                            .when(ready, |button| {
+                                button.on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.save_gitlab(cx);
+                                }))
+                            }),
+                    ),
+            )
+        } else if welcome {
+            None
+        } else {
+            Some(
+                footer.child(
+                    self.gitlab_button("gitlab-add", "+ Add instance", false, true)
+                        .on_click(cx.listener(|this, _, window, cx| {
                             cx.stop_propagation();
-                            this.save_gitlab(cx);
-                        }))
-                    }),
-            );
+                            this.show_gitlab_form(true, window, cx);
+                        })),
+                ),
+            )
+        };
         div()
             .flex()
             .flex_col()
@@ -403,6 +689,21 @@ impl HerdrWindow {
             .min_h_0()
             .child(self.render_account_tabs(Page::GitLab, cx))
             .child(body)
-            .child(footer)
+            .children(footer)
     }
+}
+
+/// Where a card's token comes from, in a word or two.
+fn source_chip(source: Source, status: &HostStatus) -> &'static str {
+    match source {
+        Source::Saved if status.connected => "connected",
+        Source::Saved => "saved token",
+        Source::Envrc => ".envrc",
+        Source::Environment => "GITLAB_TOKEN",
+        Source::Cli => "glab",
+    }
+}
+
+fn connect_shown(status: Option<&HostStatus>) -> bool {
+    status.is_some_and(|status| status.can_connect)
 }

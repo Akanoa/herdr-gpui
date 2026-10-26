@@ -142,18 +142,23 @@ does a refused `.envrc` or shell `GITLAB_TOKEN` (`EnvrcRefused`,
 asks for the file or variable to change instead.
 
 The account button at the right of the title bar opens one menu for both
-providers, with a GitHub and a GitLab tab in its header. The GitLab tab lists
-each GitLab instance the open views of every window read, and every instance
-with a saved token, once each by its lowercase name (a remote on an SSH host
+providers, with a GitHub and a GitLab tab in its header. The GitLab tab shows
+a card for each GitLab instance the open views of every window read, and every
+instance with a saved token, once each by its lowercase name (a remote on an SSH host
 of its own counts as the instance glab maps it to, and its token is checked at
 that instance's `api_host`), with where its token comes from and whom GitLab
-signs it in as (`/api/v4/user`, always over HTTPS; `gitlab/account.rs`). The
-saved record is read once and each instance is checked on its own, so a slow
-one never holds the others' rows. An instance every remote reads over plain
-`http://` takes no token, so its row says so and the page refuses to save one
-for it. A pasted personal access token is checked with GitLab before it is
-saved, stays in its field until the save succeeds, and saving or forgetting
-one makes every view sync again.
+signs it in as (`/api/v4/user`, always over HTTPS; `gitlab/account.rs`), with
+the account's picture when it is gitlab.com's or Gravatar's (a self-managed
+instance's is not fetched, and its card shows the GitLab mark). The saved
+record is read once and each instance is checked on its own, so a slow one
+never holds the others' cards. While no instance has a token, the tab shows a
+single **Connect** button for the instance this window reads instead. An
+instance every remote reads over plain `http://` takes no token, so its card
+says so and the page refuses to save one for it. The token form is folded
+behind a link and **Add instance**, which starts it at an empty instance for
+one no repository reads yet; Escape folds it again. A pasted personal access
+token is checked with GitLab before it is saved, stays in its field until the
+save succeeds, and saving or forgetting one makes every view sync again.
 
 **Connect** signs in with OAuth's device authorization grant
 (`gitlab/oauth.rs`), as GitHub's sign-in does: GitLab issues a code, the page

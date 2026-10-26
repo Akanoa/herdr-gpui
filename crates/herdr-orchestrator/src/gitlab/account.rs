@@ -90,15 +90,20 @@ pub fn resolve(
         .or_else(|| cli().map(found(Source::Cli)))
 }
 
-#[derive(Deserialize)]
-struct User {
-    username: String,
+/// The account GitLab signs a token in as.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct User {
+    pub username: String,
+    /// The account's picture, as GitLab gives it: an upload on the instance,
+    /// or Gravatar's. The app decides which it downloads.
+    #[serde(default)]
+    pub avatar_url: Option<String>,
 }
 
-/// The username GitLab at `api` signs `token` in as. Always over HTTPS, so
+/// The account GitLab at `api` signs `token` in as. Always over HTTPS, so
 /// the token is never sent in the clear: an API only served over HTTP is
 /// refused unasked. Blocks on the network.
-pub fn whoami(api: &Api, token: &SecretString) -> Result<String, Error> {
+pub fn whoami(api: &Api, token: &SecretString) -> Result<User, Error> {
     if api.scheme == Scheme::Http {
         return Err(Error::InsecureHost(api.instance.clone()));
     }
@@ -138,6 +143,5 @@ pub fn whoami(api: &Api, token: &SecretString) -> Result<String, Error> {
     if bytes.len() as u64 > LIMIT {
         return Err(Error::Size);
     }
-    let user: User = serde_json::from_slice(&bytes).map_err(Error::Json)?;
-    Ok(user.username)
+    serde_json::from_slice(&bytes).map_err(Error::Json)
 }

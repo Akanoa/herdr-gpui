@@ -35,7 +35,7 @@ pub(crate) enum Token {
         /// The token the instance is read with, which may not be the saved one.
         source: Source,
         /// Whom GitLab signs the token in as, once asked.
-        user: Option<Result<String, Arc<gitlab::Error>>>,
+        user: Option<Result<account::User, Arc<gitlab::Error>>>,
     },
 }
 
@@ -91,6 +91,10 @@ pub(crate) struct GitLabMenu {
     _save: Option<Task<()>>,
     /// An account being connected with OAuth.
     pub(crate) connecting: Option<connect::Connecting>,
+    /// The token form shows, opened from the page's link or Add instance.
+    pub(crate) form: bool,
+    /// Each signed-in account's picture.
+    avatars: crate::avatars::ProfileAvatars,
 }
 
 /// Where a token came from, as the page says it.
@@ -120,7 +124,7 @@ pub(crate) fn status_line(status: &HostStatus) -> String {
         }
         Token::None => {
             return "No token. Public projects still list; set GITLAB_TOKEN in the project's \
-                    .envrc, sign in with glab, or paste a token below for private ones."
+                    .envrc, sign in with glab, or paste a token for private ones."
                 .to_owned();
         }
         Token::Found { source, user } => (*source, user),
@@ -128,13 +132,13 @@ pub(crate) fn status_line(status: &HostStatus) -> String {
     let from = source_label(source, status);
     match user {
         None => format!("Checking the token {from}\u{2026}"),
-        Some(Ok(user)) => format!("Signed in as {user}, {from}."),
+        Some(Ok(user)) => format!("Signed in as {}, {from}.", user.username),
         Some(Err(error)) => match **error {
             gitlab::Error::Authentication if status.can_connect => {
-                format!("GitLab refused the token {from}. Connect again, or paste a new one below.")
+                format!("GitLab refused the token {from}. Connect again, or paste a new one.")
             }
             gitlab::Error::Authentication => {
-                format!("GitLab refused the token {from}. Paste a new one below.")
+                format!("GitLab refused the token {from}. Paste a new one.")
             }
             // A pasted token is only tried after these, so it cannot help.
             gitlab::Error::EnvironmentRefused => "GitLab refused GITLAB_TOKEN. Change or unset \
@@ -244,13 +248,56 @@ impl HerdrWindow {
                 input.set_appearance(self.config.ui.clone(), self.theme.clone(), cx);
             });
         }
-        if let Some(input) = &self.menu.gitlab.token {
-            let focus = input.read(cx).focus.clone();
-            window.focus(&focus, cx);
-        }
+        self.menu.gitlab.form = false;
+        window.focus(&self.menu.focus, cx);
         self.menu.gitlab.message = None;
         self.check_gitlab(cx);
         cx.notify();
+    }
+
+    /// Shows the token form at its token field, or with `add` at an empty
+    /// instance field, for an instance no repository reads yet.
+    pub(super) fn show_gitlab_form(
+        &mut self,
+        add: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let gitlab = &mut self.menu.gitlab;
+        gitlab.form = true;
+        gitlab.message = None;
+        let field = if add { &gitlab.host } else { &gitlab.token };
+        if let Some(input) = field {
+            if add {
+                input.update(cx, SearchInput::clear);
+            }
+            let focus = input.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn hide_gitlab_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu.gitlab.form = false;
+        window.focus(&self.menu.focus, cx);
+        cx.notify();
+    }
+
+    /// Loads the pictures of the accounts the page shows and takes those
+    /// that finished. Returns whether one changed.
+    pub(crate) fn poll_gitlab_avatars(&mut self) -> bool {
+        let gitlab = &mut self.menu.gitlab;
+        let urls = gitlab
+            .hosts
+            .iter()
+            .filter_map(|status| match &status.token {
+                Token::Found {
+                    user: Some(Ok(user)),
+                    ..
+                } => user.avatar_url.as_deref(),
+                _ => None,
+            });
+        gitlab.avatars.poll(urls)
     }
 
     /// The store saved tokens live in, or `None` in a headless window, which
@@ -460,7 +507,7 @@ impl HerdrWindow {
         self.run_gitlab(cx, true, move || {
             // glab may serve the instance's API elsewhere, or only over HTTP.
             let api = Api::of_instance(&host, &cli_hosts::read());
-            let user = account::whoami(&api, &token)?;
+            let user = account::whoami(&api, &token)?.username;
             saved::save(store, &host, Some(token))?;
             Ok(format!(
                 "Saved. GitLab at {host} signs this token in as {user}."
@@ -497,11 +544,11 @@ impl HerdrWindow {
             let changed = result.is_ok();
             let _ = this.update(cx, |this, cx| {
                 this.menu.gitlab.working = false;
-                if saves_token
-                    && result.is_ok()
-                    && let Some(input) = &this.menu.gitlab.token
-                {
-                    input.update(cx, SearchInput::clear);
+                if saves_token && result.is_ok() {
+                    this.menu.gitlab.form = false;
+                    if let Some(input) = &this.menu.gitlab.token {
+                        input.update(cx, SearchInput::clear);
+                    }
                 }
                 this.menu.gitlab.message = Some(match result {
                     Ok(done) => done,
@@ -528,7 +575,8 @@ impl HerdrWindow {
     }
 
     /// Keys while the GitLab page shows. The fields edit themselves; Enter
-    /// saves the token, Tab moves between the fields, and Escape closes.
+    /// saves the token, Tab moves between the fields, and Escape closes the
+    /// token form, then the menu.
     pub(super) fn gitlab_key(
         &mut self,
         event: &KeyDownEvent,
@@ -549,9 +597,10 @@ impl HerdrWindow {
         cx.stop_propagation();
         window.prevent_default();
         match key {
+            "escape" if self.menu.gitlab.form => self.hide_gitlab_form(window, cx),
             "escape" => self.dismiss_menu(window, cx),
-            "enter" if !self.menu.gitlab.working => self.save_gitlab(cx),
-            "tab" => {
+            "enter" if self.menu.gitlab.form && !self.menu.gitlab.working => self.save_gitlab(cx),
+            "tab" if self.menu.gitlab.form => {
                 let next = match focused {
                     Some(input) if Some(input) == self.menu.gitlab.host.as_ref() => {
                         &self.menu.gitlab.token

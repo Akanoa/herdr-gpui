@@ -7,7 +7,11 @@
 use super::{HostStatus, Token, merge_hosts, status_line};
 use crate::{HerdrWindow, menu::Page, orchestrator::GitLabRead};
 use gpui::{Entity, TestAppContext, VisualTestContext, px, size};
-use herdr_orchestrator::gitlab::{self, Scheme, account::Source, cli_hosts::CliHost};
+use herdr_orchestrator::gitlab::{
+    self, Scheme,
+    account::{self, Source},
+    cli_hosts::CliHost,
+};
 use std::{path::PathBuf, sync::Arc};
 
 fn page(cx: &mut TestAppContext) -> (Entity<HerdrWindow>, &mut VisualTestContext) {
@@ -43,7 +47,13 @@ fn status(source: Option<Source>, user: Option<Result<&str, gitlab::Error>>) -> 
         token: match source {
             Some(source) => Token::Found {
                 source,
-                user: user.map(|user| user.map(str::to_owned).map_err(Arc::new)),
+                user: user.map(|user| {
+                    user.map(|username| account::User {
+                        username: username.into(),
+                        avatar_url: None,
+                    })
+                    .map_err(Arc::new)
+                }),
             },
             None => Token::None,
         },
@@ -78,7 +88,7 @@ fn an_instances_row_says_where_its_token_comes_from_and_whom_it_signs_in() {
             Some(Source::Cli),
             Some(Err(gitlab::Error::Authentication))
         )),
-        "GitLab refused the token from the GitLab CLI (glab). Paste a new one below."
+        "GitLab refused the token from the GitLab CLI (glab). Paste a new one."
     );
     let limited = status_line(&status(
         Some(Source::Saved),
@@ -167,24 +177,98 @@ fn a_remote_on_an_ssh_host_lists_its_instance_and_api() {
 }
 
 #[gpui::test]
-fn the_page_lists_gitlab_dot_com_and_the_token_form(cx: &mut TestAppContext) {
+fn with_no_token_the_page_offers_connect_and_folds_the_token_form(cx: &mut TestAppContext) {
     let (view, cx) = page(cx);
     for selector in [
         "accounts-tab-github",
         "accounts-tab-gitlab",
-        "gitlab-host-0",
-        "gitlab-token",
-        "gitlab-host-input",
-        "gitlab-token-input",
-        "gitlab-save",
+        "gitlab-welcome",
+        "gitlab-connect-0",
+        "gitlab-paste",
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "{selector}");
     }
-    assert!(cx.debug_bounds("gitlab-forget-0").is_none());
+    for selector in ["gitlab-host-0", "gitlab-token", "gitlab-save"] {
+        assert!(cx.debug_bounds(selector).is_none(), "{selector}");
+    }
     view.read_with(cx, |view, _| {
         assert_eq!(view.menu.gitlab.hosts.len(), 1);
         assert_eq!(view.menu.gitlab.hosts[0].host, "gitlab.com");
     });
+    click(cx, "gitlab-paste");
+    for selector in [
+        "gitlab-token",
+        "gitlab-host-input",
+        "gitlab-token-input",
+        "gitlab-save",
+        "gitlab-form-cancel",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector}");
+    }
+    assert!(cx.debug_bounds("gitlab-welcome").is_none());
+    click(cx, "gitlab-form-cancel");
+    assert!(cx.debug_bounds("gitlab-token").is_none());
+    assert!(cx.debug_bounds("gitlab-welcome").is_some());
+}
+
+#[gpui::test]
+fn each_instance_with_a_token_gets_a_card(cx: &mut TestAppContext) {
+    let (view, cx) = page(cx);
+    view.update(cx, |view, cx| {
+        view.menu.gitlab.hosts = vec![
+            HostStatus {
+                connected: true,
+                can_connect: true,
+                ..status(Some(Source::Saved), Some(Ok("penso")))
+            },
+            HostStatus {
+                host: "code.internal:8080".into(),
+                ..status(Some(Source::Envrc), Some(Ok("fabien")))
+            },
+            HostStatus {
+                host: "gitlab.freedesktop.org".into(),
+                can_connect: true,
+                ..status(None, None)
+            },
+        ];
+        cx.notify();
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("gitlab-welcome").is_none());
+    for selector in [
+        "gitlab-host-0",
+        "gitlab-host-1",
+        "gitlab-host-2",
+        "gitlab-forget-0",
+        "gitlab-connect-2",
+        "gitlab-add",
+        "gitlab-paste",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector}");
+    }
+    // A signed-in account is not offered Connect; an .envrc token has nothing
+    // to remove here.
+    for selector in ["gitlab-connect-0", "gitlab-connect-1", "gitlab-forget-1"] {
+        assert!(cx.debug_bounds(selector).is_none(), "{selector}");
+    }
+    // The picture slot stays square for a round crop.
+    let avatar = cx.debug_bounds("gitlab-avatar-0").unwrap();
+    assert_eq!(avatar.size, size(px(36.), px(36.)));
+    // Add instance opens the form at an empty instance field.
+    click(cx, "gitlab-add");
+    view.read_with(cx, |view, cx| {
+        let gitlab = &view.menu.gitlab;
+        assert!(gitlab.form);
+        assert!(gitlab.host.as_ref().unwrap().read(cx).text().is_empty());
+    });
+    assert!(cx.debug_bounds("gitlab-host-0").is_none());
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    view.read_with(cx, |view, _| {
+        assert!(!view.menu.gitlab.form);
+        assert!(view.menu.page == Some(Page::GitLab));
+    });
+    assert!(cx.debug_bounds("gitlab-host-0").is_some());
 }
 
 #[gpui::test]
@@ -225,12 +309,14 @@ fn only_a_saved_token_can_be_forgotten(cx: &mut TestAppContext) {
 
 fn type_in(view: &Entity<HerdrWindow>, cx: &mut VisualTestContext, host: &str, token: &str) {
     view.update(cx, |view, cx| {
+        view.menu.gitlab.form = true;
         let gitlab = &view.menu.gitlab;
         let (host_input, token_input) =
             (gitlab.host.clone().unwrap(), gitlab.token.clone().unwrap());
         host_input.update(cx, |input, cx| input.set_text_selected(host, cx));
         token_input.update(cx, |input, cx| input.set_text_selected(token, cx));
     });
+    draw(cx);
 }
 
 fn message_and_token(view: &Entity<HerdrWindow>, cx: &mut VisualTestContext) -> (String, String) {
@@ -405,4 +491,21 @@ fn work_finished_in_the_background_refreshes_every_window(cx: &mut TestAppContex
         assert_eq!(gitlab.message.as_deref(), Some("Forgot the token."));
         assert!(gitlab.hosts.iter().any(|host| host.host == "gitlab.com"));
     });
+}
+
+#[gpui::test]
+fn a_refused_envrc_token_is_not_offered_connect(cx: &mut TestAppContext) {
+    let (view, cx) = page(cx);
+    view.update(cx, |view, cx| {
+        view.menu.gitlab.hosts = vec![HostStatus {
+            can_connect: true,
+            ..status(Some(Source::Envrc), Some(Err(gitlab::Error::EnvrcRefused)))
+        }];
+        cx.notify();
+    });
+    draw(cx);
+    // The .envrc is tried before a connected account, so only fixing it helps.
+    assert!(cx.debug_bounds("gitlab-host-0").is_some());
+    assert!(cx.debug_bounds("gitlab-source-0").is_some());
+    assert!(cx.debug_bounds("gitlab-connect-0").is_none());
 }

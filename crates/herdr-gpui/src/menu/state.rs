@@ -453,6 +453,7 @@ impl MenuState {
         self.github_token = None;
         // Closing the menu stops a GitLab connection, as it does GitHub's.
         self.gitlab.connecting = None;
+        self.gitlab.form = false;
         self.page = None;
         if let Some(palette) = self.palette.take() {
             self.palette_resume = Some(palette.resume());

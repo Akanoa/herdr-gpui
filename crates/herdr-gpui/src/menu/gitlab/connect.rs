@@ -160,7 +160,7 @@ async fn connect(
                     .background_spawn(async move {
                         // glab may serve the instance's API elsewhere.
                         let api = Api::of_instance(&host, &cli_hosts::read());
-                        let user = account::whoami(&api, &pair.access)?;
+                        let user = account::whoami(&api, &pair.access)?.username;
                         saved::save_kept(store, &host, Some(Kept::OAuth(pair)))?;
                         Ok(user)
                     })
