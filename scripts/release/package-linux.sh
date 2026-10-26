@@ -6,10 +6,10 @@ version_check "$1"
 case $2 in x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu) ;; *) fail 'Unsupported Linux target';; esac
 [[ -f $3 && -d $4 ]] || fail 'Binary file and existing output directory required'
 [[ -f $5 && -s $5 ]] || fail 'Nonempty third-party notices file required'
-# The app starts chats with the herdr-acp beside its executable and runs the
-# herdr-remote-control beside it as a user service; the build leaves both
-# beside herdr-gpui.
-companions=(herdr-acp herdr-remote-control)
+# The app starts chats with the herdr-acp beside its executable, runs the
+# herdr-remote-control beside it as a user service, and runs automations in
+# the herdr-automate there; the build leaves all three beside herdr-gpui.
+companions=(herdr-acp herdr-remote-control herdr-automate)
 for companion in "${companions[@]}"; do
     [[ -f $(dirname -- "$3")/$companion ]] || fail "A $companion beside the binary required"
 done

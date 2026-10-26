@@ -6,8 +6,9 @@ mirrors package-linux.sh: the executable plus the same license and notice files.
 Beside herdr-gpui.exe, which is a console program because it is also the CLI,
 the zip carries herdr-gpui-launcher.exe, the windowed launcher that starts it without a
 console window from Explorer or the Start menu, herdr-acp.exe, which the app
-starts chats with, and herdr-remote-control.exe, the remote control daemon the
-app runs as a scheduled task; the build leaves both beside herdr-gpui.exe.
+starts chats with, herdr-remote-control.exe, the remote control daemon the
+app runs as a scheduled task, and herdr-automate.exe, the automation daemon;
+the build leaves all three beside herdr-gpui.exe.
 """
 import argparse
 from pathlib import Path
@@ -42,7 +43,8 @@ def package(version, target, binary, launcher, output_dir, notices):
         raise ValueError("Binary file and existing output directory required")
     if not launcher.is_file():
         raise ValueError("Launcher file required")
-    companions = [binary.parent / name for name in ("herdr-acp.exe", "herdr-remote-control.exe")]
+    companions = [binary.parent / name for name in ("herdr-acp.exe", "herdr-remote-control.exe",
+                                                         "herdr-automate.exe")]
     for companion in companions:
         if not companion.is_file():
             raise ValueError(f"A {companion.name} beside the binary required")

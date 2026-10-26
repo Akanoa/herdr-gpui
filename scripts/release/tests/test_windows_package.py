@@ -31,7 +31,7 @@ import pathlib, sys
 defines = dict(arg[2:].split("=", 1) for arg in sys.argv[1:] if arg.startswith("/D"))
 source = pathlib.Path(defines["SourceDir"])
 assert all((source / name).is_file() for name in ("herdr-gpui.exe", "herdr-gpui-launcher.exe", "herdr-acp.exe",
-                                              "herdr-remote-control.exe"))
+                                              "herdr-remote-control.exe", "herdr-automate.exe"))
 assert sys.argv[-1].endswith("herdr-gpui.iss")
 name = f"Herdr-{defines['Version']}-{defines['Target']}-setup.exe"
 (pathlib.Path(defines["OutputDir"]) / name).write_bytes(b"setup " + defines["Architecture"].encode())
@@ -66,7 +66,7 @@ class InstallerTests(unittest.TestCase):
         root = f"Herdr-{VERSION}-{TARGET}/"
         archive = self.release_zip([root + "herdr-gpui.exe", root + "herdr-gpui-launcher.exe",
                                     root + "herdr-acp.exe", root + "herdr-remote-control.exe",
-                                    root + "licenses/LICENSE"])
+                                    root + "herdr-automate.exe", root + "licenses/LICENSE"])
         output = Path(self.build(archive).stdout.strip())
         self.assertEqual(output, self.work.resolve() / f"Herdr-{VERSION}-{TARGET}-setup.exe")
         self.assertEqual(output.read_bytes(), b"setup x64compatible")
@@ -76,11 +76,12 @@ class InstallerTests(unittest.TestCase):
     def test_rejects_a_zip_without_the_layout(self):
         root = f"Herdr-{VERSION}-{TARGET}/"
         executables = [root + name for name in ("herdr-gpui.exe", "herdr-gpui-launcher.exe", "herdr-acp.exe",
-                                                "herdr-remote-control.exe")]
+                                                "herdr-remote-control.exe", "herdr-automate.exe")]
         cases = {
             "no launcher": [e for e in executables if not e.endswith("launcher.exe")],
             "no herdr-acp": [e for e in executables if not e.endswith("herdr-acp.exe")],
             "no herdr-remote-control": [e for e in executables if not e.endswith("herdr-remote-control.exe")],
+            "no herdr-automate": [e for e in executables if not e.endswith("herdr-automate.exe")],
             "outside the root": [*executables, "other/x"],
             "escaping the root": [*executables, root + "../x"],
         }
