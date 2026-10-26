@@ -23,6 +23,7 @@ mod row_start;
 mod rows;
 mod sessions;
 mod sign_in;
+mod source_chip;
 mod status;
 mod twin_text;
 mod twins;

@@ -600,7 +600,7 @@ impl OrchestratorView {
                 repo.snapshot
                     .sources
                     .iter()
-                    .any(|source| matches!(source.state, SyncState::Syncing))
+                    .any(|source| matches!(source.state, SyncState::Syncing { .. }))
             })
     }
 
