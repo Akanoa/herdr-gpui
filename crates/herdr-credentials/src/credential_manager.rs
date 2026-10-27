@@ -1,11 +1,16 @@
 //! Windows Credential Manager as the Windows keyring for saved sign-ins.
 //! Each entry is a generic credential named `SERVICE/ACCOUNT`, kept for this
 //! user on this computer only (`CRED_PERSIST_LOCAL_MACHINE`, never roamed to
-//! other computers in a domain). A credential holds at most
-//! `CRED_MAX_CREDENTIAL_BLOB_SIZE` bytes, so a larger secret, such as several
-//! GitLab accounts in one record, continues in up to [`PARTS`] - 1 more
-//! credentials named `SERVICE/ACCOUNT#partN`; one that fits is stored alone. Windows encrypts it with the user's logon
-//! secrets, so other users cannot read it. The calls are synchronous and
+//! other computers in a domain). Windows encrypts it with the user's logon
+//! secrets, so other users cannot read it.
+//!
+//! A credential holds at most `CRED_MAX_CREDENTIAL_BLOB_SIZE` bytes. A larger
+//! secret, such as several GitLab accounts in one record, is kept in parts
+//! named `SERVICE/ACCOUNT#a1`, `#a2`, and so on, and the entry itself holds
+//! only which set of parts is current ([`SPLIT`]). A new secret is written to
+//! the other set, `#b1` and on, and the entry switched to it in one write
+//! before the old set is removed, so a save that fails or stops midway
+//! leaves the previous secret whole. A secret that fits is the entry itself. The calls are synchronous and
 //! cheap, but callers still run them on a background worker.
 //!
 //! `unsafe` is needed because the standard library and the workspace's
@@ -47,13 +52,77 @@ fn target(service: &str, account: &str) -> String {
     format!("{service}/{account}")
 }
 
-/// The target of part `index` of a split secret. The first part is the
-/// entry's own target, so a secret that fits is stored as it always was.
-fn part_target(service: &str, account: &str, index: usize) -> String {
-    match index {
-        0 => target(service, account),
-        index => format!("{}#part{}", target(service, account), index + 1),
+/// Starts an entry that names a split secret's current parts, as
+/// `herdr-parts:SET:COUNT`, instead of holding the secret. A secret that
+/// starts with it is always split, so the two are never confused.
+const SPLIT: &[u8] = b"herdr-parts:";
+
+/// One of the two sets of names a split secret's parts alternate between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Set {
+    A,
+    B,
+}
+
+impl Set {
+    const BOTH: [Self; 2] = [Self::A, Self::B];
+
+    fn letter(self) -> char {
+        match self {
+            Self::A => 'a',
+            Self::B => 'b',
+        }
     }
+
+    fn other(self) -> Self {
+        match self {
+            Self::A => Self::B,
+            Self::B => Self::A,
+        }
+    }
+}
+
+/// Where an entry's split secret is: its set of parts and how many.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Split {
+    set: Set,
+    count: usize,
+}
+
+impl Split {
+    /// The parts an entry names, or `None` for an entry that is the secret.
+    /// An entry that starts like one but names no valid parts is damaged.
+    fn of(entry: &[u8]) -> Option<Result<Self>> {
+        let rest = entry.strip_prefix(SPLIT)?;
+        let parsed = std::str::from_utf8(rest).ok().and_then(|rest| {
+            let (set, count) = rest.split_once(':')?;
+            let set = match set {
+                "a" => Set::A,
+                "b" => Set::B,
+                _ => return None,
+            };
+            let count = count
+                .parse()
+                .ok()
+                .filter(|count| (1..=PARTS).contains(count))?;
+            Some(Self { set, count })
+        });
+        Some(parsed.ok_or_else(|| Error::Read(io::ErrorKind::InvalidData.into()).into()))
+    }
+
+    fn entry(self) -> String {
+        format!(
+            "{}{}:{}",
+            String::from_utf8_lossy(SPLIT),
+            self.set.letter(),
+            self.count
+        )
+    }
+}
+
+/// The target of part `index`, from 0, of `set`.
+fn part_target(service: &str, account: &str, set: Set, index: usize) -> String {
+    format!("{}#{}{}", target(service, account), set.letter(), index + 1)
 }
 
 /// A NUL-terminated UTF-16 copy for the wide-string API.
@@ -108,18 +177,22 @@ impl Drop for Read {
 }
 
 /// The entry `account` under `service`, or `None` when nothing is saved.
-/// A split secret is joined from its parts, up to the first one missing.
+/// A split secret is joined from the parts its entry names; a missing part
+/// is an error, never a shorter secret.
 pub(crate) fn read(service: &str, account: &str) -> Result<Option<SecretString>> {
-    let Some(first) = read_part(&part_target(service, account, 0))? else {
+    let Some(entry) = read_part(&target(service, account))? else {
         return Ok(None);
     };
+    let mut entry = Zeroizing::new(entry);
+    let split = match Split::of(&entry) {
+        None => return credential_bytes(std::mem::take(&mut *entry)).map(Some),
+        Some(split) => split?,
+    };
     // Sized for every part up front, so no copy is left unwiped by a move.
-    let mut secret = Zeroizing::new(Vec::with_capacity(PART * PARTS));
-    secret.extend_from_slice(&Zeroizing::new(first));
-    for index in 1..PARTS {
-        let Some(part) = read_part(&part_target(service, account, index))? else {
-            break;
-        };
+    let mut secret = Zeroizing::new(Vec::with_capacity(PART * split.count));
+    for index in 0..split.count {
+        let part = read_part(&part_target(service, account, split.set, index))?
+            .ok_or_else(|| Error::Read(io::ErrorKind::NotFound.into()))?;
         secret.extend_from_slice(&Zeroizing::new(part));
     }
     credential_bytes(std::mem::take(&mut *secret)).map(Some)
@@ -147,40 +220,69 @@ fn read_part(target: &str) -> Result<Option<Vec<u8>>> {
 
 /// Saves `token` as `account` under `service`, with `label` as its comment,
 /// or removes the entry when it is `None`. Removing an entry that does not
-/// exist succeeds. A secret too large for one credential is split: the
-/// parts no longer needed are removed first and the first part is written
-/// last, so a reader never joins a new first part to old ones.
+/// exist succeeds. Until the entry itself is written, the previous secret
+/// stays whole; see the module's note on split secrets.
 pub(crate) fn save(
     service: &str,
     label: &str,
     token: Option<&SecretString>,
     account: &str,
 ) -> Result<()> {
-    let secret = token.map_or(&[][..], |token| token.expose_secret().as_bytes());
+    let entry = target(service, account);
+    let Some(token) = token else {
+        delete(&wide(&entry))?;
+        remove_parts(service, account, &Set::BOTH, 0);
+        return Ok(());
+    };
+    let secret = token.expose_secret().as_bytes();
+    if secret.len() <= PART && !secret.starts_with(SPLIT) {
+        write_part(&entry, label, account, secret)?;
+        remove_parts(service, account, &Set::BOTH, 0);
+        return Ok(());
+    }
     let parts: Vec<&[u8]> = secret.chunks(PART).collect();
     if parts.len() > PARTS {
         return Err(Error::Write(io::ErrorKind::FileTooLarge.into()).into());
     }
-    let kept = if token.is_some() {
-        parts.len().max(1)
-    } else {
-        0
+    let current = read_part(&entry)?
+        .and_then(|entry| Split::of(&Zeroizing::new(entry)))
+        .and_then(Result::ok);
+    let split = Split {
+        set: current.map_or(Set::A, |current| current.set.other()),
+        count: parts.len(),
     };
-    for index in (kept.max(1)..PARTS).rev() {
-        delete(&wide(&part_target(service, account, index)))?;
+    let written = parts
+        .iter()
+        .enumerate()
+        .try_for_each(|(index, part)| {
+            write_part(
+                &part_target(service, account, split.set, index),
+                label,
+                account,
+                part,
+            )
+        })
+        .and_then(|()| write_part(&entry, label, account, split.entry().as_bytes()));
+    if let Err(error) = written {
+        // The entry still names the previous secret, which is left whole.
+        remove_parts(service, account, &[split.set], 0);
+        return Err(error);
     }
-    if token.is_none() {
-        return delete(&wide(&part_target(service, account, 0)));
+    remove_parts(service, account, &[split.set.other()], 0);
+    remove_parts(service, account, &[split.set], split.count);
+    Ok(())
+}
+
+/// Removes `sets`' parts from `from` on, which no entry names any more.
+/// A part left behind is never read, so a failure here fails no save.
+fn remove_parts(service: &str, account: &str, sets: &[Set], from: usize) {
+    for &set in sets {
+        for index in from..PARTS {
+            if let Err(error) = delete(&wide(&part_target(service, account, set, index))) {
+                tracing::debug!(%error, "A stale Credential Manager part could not be removed");
+            }
+        }
     }
-    for (index, part) in parts.iter().enumerate().skip(1).rev() {
-        write_part(&part_target(service, account, index), label, account, part)?;
-    }
-    write_part(
-        &part_target(service, account, 0),
-        label,
-        account,
-        parts.first().copied().unwrap_or_default(),
-    )
 }
 
 /// Writes one credential of at most [`PART`] bytes.
