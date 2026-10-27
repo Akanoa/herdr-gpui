@@ -65,6 +65,14 @@ fn entries_are_named_by_service_and_account() {
         "dev.herdr.gpui.coder/coder"
     );
     assert_eq!(wide("ab"), [u16::from(b'a'), u16::from(b'b'), 0]);
+    assert_eq!(
+        part_target("dev.herdr.gpui.gitlab", "tokens", 0),
+        "dev.herdr.gpui.gitlab/tokens"
+    );
+    assert_eq!(
+        part_target("dev.herdr.gpui.gitlab", "tokens", 1),
+        "dev.herdr.gpui.gitlab/tokens#part2"
+    );
 }
 
 #[test]
@@ -84,25 +92,40 @@ fn saves_reads_replaces_and_removes_an_entry() {
 }
 
 #[test]
-fn a_secret_too_large_for_credential_manager_is_refused_and_keeps_the_old_one() {
+fn a_secret_too_large_for_one_credential_is_split_and_joined_again() {
     let scratch = Scratch::new("large");
     let [main, _] = scratch.accounts;
-    scratch.save(main, Some("kept")).unwrap();
-    let largest = "a".repeat(CRED_MAX_CREDENTIAL_BLOB_SIZE as usize);
+    let largest = "a".repeat(PART);
     scratch.save(main, Some(&largest)).unwrap();
     assert_eq!(scratch.read(main), Some(largest));
+    let split = "abc".repeat(PART);
+    scratch.save(main, Some(&split)).unwrap();
+    assert_eq!(scratch.read(main), Some(split));
+    // A smaller secret leaves no part of the larger one behind.
     scratch.save(main, Some("kept")).unwrap();
+    assert_eq!(scratch.read(main).as_deref(), Some("kept"));
+    assert_eq!(
+        read_part(&part_target(&scratch.service, main, 1)).unwrap(),
+        None
+    );
     let error = scratch
-        .save(
-            main,
-            Some(&"a".repeat(CRED_MAX_CREDENTIAL_BLOB_SIZE as usize + 1)),
-        )
+        .save(main, Some(&"a".repeat(PART * PARTS + 1)))
         .unwrap_err();
     assert!(
         matches!(&error, crate::Error::CredentialManager(Error::Write(source)) if source.kind() == io::ErrorKind::FileTooLarge),
         "{error:?}"
     );
     assert_eq!(scratch.read(main).as_deref(), Some("kept"));
+    // Removing the entry removes every part.
+    scratch.save(main, Some(&"abc".repeat(PART))).unwrap();
+    scratch.save(main, None).unwrap();
+    assert_eq!(scratch.read(main), None);
+    for index in 1..PARTS {
+        assert_eq!(
+            read_part(&part_target(&scratch.service, main, index)).unwrap(),
+            None
+        );
+    }
 }
 
 #[test]

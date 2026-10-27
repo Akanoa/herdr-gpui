@@ -205,3 +205,23 @@ fn an_oauth_token_is_renewed_and_kept_only_when_due() {
             .is_none()
     );
 }
+
+#[test]
+fn the_largest_valid_record_fits_every_store() {
+    use crate::gitlab::saved::MAX_HOSTS;
+    let mut saved = Saved::default();
+    let long = |fill: char| SecretString::from(fill.to_string().repeat(1024));
+    for index in 0..MAX_HOSTS {
+        let host = format!("{index:02}{}", "h".repeat(250));
+        let oauth = OAuth {
+            access: long('a'),
+            refresh: long('r'),
+            expires_at: u64::MAX,
+            application: "x".repeat(256),
+        };
+        saved.set_kept(&host, Some(Kept::OAuth(oauth))).unwrap();
+    }
+    let record = saved.record();
+    assert_eq!(Saved::parse(&record).unwrap().hosts().count(), MAX_HOSTS);
+    assert!(record.expose_secret().len() <= herdr_credentials::LIMIT);
+}

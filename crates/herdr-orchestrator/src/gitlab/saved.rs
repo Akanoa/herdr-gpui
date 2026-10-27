@@ -205,7 +205,8 @@ impl Saved {
         Ok(Self(saved))
     }
 
-    fn record(&self) -> SecretString {
+    /// The record as the store keeps it.
+    pub(crate) fn record(&self) -> SecretString {
         let mut text = Zeroizing::new(String::new());
         for (host, kept) in &self.0 {
             text.push_str(host);
